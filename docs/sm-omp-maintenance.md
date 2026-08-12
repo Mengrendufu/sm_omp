@@ -187,19 +187,32 @@ merge or release notes.
 
 ## Release tags
 
-Releases are cut from a clean, verified `custom` tip. Use annotated tags of the
-form `sm-omp-vYYYY.MM.DD.N`, where `N` starts at `1` for each date:
+Releases are cut from a clean, verified `custom` tip. Each annotated tag follows
+the official OMP base tag and adds the suffix `-sm.N`:
+
+```text
+v<upstream-version>-sm.<N>
+```
+
+`sm` identifies the `sm_omp` personal customization and `N` starts at `1` for
+each official base version. For example, the first customized release based on
+official `v17.2.15` is `v17.2.15-sm.1`; another frozen snapshot on the same base
+is `v17.2.15-sm.2`, while the first snapshot after updating to official
+`v17.2.16` is `v17.2.16-sm.1`.
 
 ```bash
 git switch custom
 git status --short
-git tag -a sm-omp-vYYYY.MM.DD.N -m "sm_omp YYYY.MM.DD.N"
-git push origin custom
-git push origin sm-omp-vYYYY.MM.DD.N
+git describe --tags --exact-match main
+git tag -a v17.2.15-sm.1 \
+  -m "sm_omp personal customization based on official OMP v17.2.15"
+git push --atomic origin custom refs/tags/v17.2.15-sm.1
 ```
 
-A tag identifies the exact rollback point. Do not tag `main` as an sm_omp
-release and do not move an existing release tag.
+The official base tag must already identify `main`; never recreate or move it
+on `custom`. A customized tag identifies an exact rollback point. Do not tag
+`main` as an sm_omp release, do not create mutable `latest` aliases, and do not
+move an existing release tag.
 
 ## Rollback
 

@@ -115,6 +115,7 @@ export class ImageBudget {
 	// id so a partial pass reproduces the on-screen live/text split without a
 	// full, correctly-ordered walk.
 	#suppressedIds = new Set<number>();
+	#graphicsSuppressionDepth = 0;
 	/**
 	 * Per-image direct-placement emit state: source pixel geometry for the
 	 * renderer's clipped source rectangle, plus the placement-id epoch (see
@@ -154,6 +155,20 @@ export class ImageBudget {
 		if (next === this.#cap) return;
 		this.#cap = next;
 		this.#reconcile(this.#lastTotal);
+	}
+
+	/** Render a component tree with every image forced to its text fallback. */
+	withGraphicsSuppressed<T>(render: () => T): T {
+		this.#graphicsSuppressionDepth++;
+		try {
+			return render();
+		} finally {
+			this.#graphicsSuppressionDepth--;
+		}
+	}
+
+	get graphicsSuppressed(): boolean {
+		return this.#graphicsSuppressionDepth > 0;
 	}
 
 	/**
@@ -513,7 +528,10 @@ export class Image implements Component {
 		// its display-order slot in the budget. Only graphics-capable frames count
 		// toward (and are demoted by) the budget; without a protocol every image is
 		// already text.
-		const suppressed = hasProtocol && this.#budget !== undefined ? this.#budget.observe(this.#imageId ?? 0) : false;
+		const suppressed =
+			hasProtocol && this.#budget !== undefined
+				? this.#budget.graphicsSuppressed || this.#budget.observe(this.#imageId ?? 0)
+				: false;
 
 		if (
 			this.#cachedLines &&

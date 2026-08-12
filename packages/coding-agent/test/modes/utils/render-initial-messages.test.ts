@@ -89,7 +89,7 @@ function makeCtx(): {
 		},
 		renderSessionContext: renderSessionContextSpy,
 		showStatus: vi.fn(),
-		ui: { requestRender: vi.fn() },
+		ui: { requestRender: vi.fn(), resetFullscreenViewport: vi.fn() },
 		resetTranscript: () => ctx.chatContainer.clear(),
 	} as unknown as InteractiveModeContext;
 
@@ -156,7 +156,7 @@ function makeRenderCtx(
 		statusLine: { invalidate: vi.fn() },
 		updateEditorBorderColor: vi.fn(),
 		updateEditorTopBorder: vi.fn(),
-		ui: { requestRender: vi.fn(), imageBudget: undefined },
+		ui: { requestRender: vi.fn(), resetFullscreenViewport: vi.fn(), imageBudget: undefined },
 		resetTranscript: () => chatContainer.clear(),
 		present: (content: Component | readonly Component[]) => {
 			const components = Array.isArray(content) ? content : [content];
@@ -231,6 +231,7 @@ describe("UiHelpers.renderInitialMessages — clearTerminalHistory", () => {
 		await Settings.init({ inMemory: true });
 		const { ctx } = makeCtx();
 		new UiHelpers(ctx).renderInitialMessages({ clearTerminalHistory: true });
+		expect(ctx.ui.resetFullscreenViewport).toHaveBeenCalledTimes(1);
 		expect(ctx.ui.requestRender).toHaveBeenCalledWith(true, { clearScrollback: true });
 	});
 
@@ -242,6 +243,7 @@ describe("UiHelpers.renderInitialMessages — clearTerminalHistory", () => {
 			([force, opts]) => force === true && (opts as { clearScrollback?: boolean } | undefined)?.clearScrollback,
 		);
 		expect(clearedCall).toBeUndefined();
+		expect(ctx.ui.resetFullscreenViewport).not.toHaveBeenCalled();
 	});
 });
 

@@ -397,6 +397,12 @@ describe("Settings", () => {
 			expect(settings.get("tui.maxInlineImages")).toBe(8);
 		});
 
+		it("uses the fixed input layout by default on the custom branch", async () => {
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+			expect(settings.get("tui.layout")).toBe("fixed");
+			expect(getDefault("tui.layout")).toBe("fixed");
+		});
+
 		it("keeps native terminal progress disabled by default", async () => {
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 			expect(settings.get("terminal.showProgress")).toBe(false);

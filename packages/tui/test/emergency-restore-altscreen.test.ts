@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { emergencyTerminalRestore, ProcessTerminal, setAltScreenActive } from "@oh-my-pi/pi-tui/terminal";
+import {
+	emergencyTerminalRestore,
+	isConPTYHosted,
+	ProcessTerminal,
+	setAltScreenActive,
+} from "@oh-my-pi/pi-tui/terminal";
 import { setTerminalHeadless } from "@oh-my-pi/pi-utils";
 
 // Regression coverage for the Windows shell-handoff corruption on exit:
@@ -78,6 +83,7 @@ describe("emergencyTerminalRestore alt-screen gating", () => {
 		expect(restored).not.toContain("\x1b[?1049l");
 		expect(restored).toContain("\x1b[?1006l");
 		expect(restored).toContain("\x1b[?1003l");
+		expect(restored).toContain("\x1b[?1002l");
 		expect(restored).toContain("\x1b[?1000l");
 		// Still performs the blind restore itself (cursor visibility proves the branch ran).
 		expect(restored).toContain("\x1b[?25h");
@@ -96,6 +102,7 @@ describe("emergencyTerminalRestore alt-screen gating", () => {
 		expect(firstRestore.indexOf("\x1b[<u", altExit + 1)).toBeGreaterThan(altExit);
 		expect(firstRestore).toContain("\x1b[?1006l");
 		expect(firstRestore).toContain("\x1b[?1003l");
+		expect(firstRestore).toContain("\x1b[?1002l");
 		expect(firstRestore).toContain("\x1b[?1000l");
 
 		// State was consumed: a second restore must not leave the (now main) buffer again.
@@ -112,6 +119,7 @@ describe("emergencyTerminalRestore alt-screen gating", () => {
 		expect(inactiveRestore).not.toContain("\x1b[?1049l");
 		expect(inactiveRestore).toContain("\x1b[?1006l");
 		expect(inactiveRestore).toContain("\x1b[?1003l");
+		expect(inactiveRestore).toContain("\x1b[?1002l");
 		expect(inactiveRestore).toContain("\x1b[?1000l");
 
 		const active = startCapturedTerminal();
@@ -122,12 +130,13 @@ describe("emergencyTerminalRestore alt-screen gating", () => {
 		expect(activeRestore).toContain("\x1b[?1049l");
 		expect(activeRestore).toContain("\x1b[?1006l");
 		expect(activeRestore).toContain("\x1b[?1003l");
+		expect(activeRestore).toContain("\x1b[?1002l");
 		expect(activeRestore).toContain("\x1b[?1000l");
 	});
 	it("pops keyboard enhancement frames on both screens when crashing from a fullscreen overlay", () => {
 		const { terminal, writes } = startCapturedTerminal();
 		process.stdin.emit("data", "\x1b[?0u");
-		expect(terminal.kittyEnableSequence).toBe("\x1b[>5u");
+		expect(terminal.kittyEnableSequence).toBe(isConPTYHosted() ? "\x1b[>1u" : "\x1b[>5u");
 
 		terminal.write(`\x1b[?1049h${terminal.kittyEnableSequence}`);
 		setAltScreenActive(true);

@@ -56,6 +56,24 @@ function createModelContext(advisorActive: boolean): SegmentContext {
 	};
 }
 
+describe("status line Pi focus indicator", () => {
+	it("uses accent only while the input pane is focused", () => {
+		const focused = createModelContext(false);
+		focused.inputFocused = true;
+		const unfocused = createModelContext(false);
+		unfocused.inputFocused = false;
+		const icon = theme.icon.pi ? `${theme.icon.pi} ` : "";
+
+		expect(renderSegment("pi", focused).content).toBe(theme.fg("accent", icon));
+		expect(renderSegment("pi", unfocused).content).toBe(theme.fg("dim", icon));
+
+		const proxied = createModelContext(false);
+		proxied.inputFocused = true;
+		proxied.focusedAgentId = "worker";
+		expect(renderSegment("pi", proxied).content).toBe(theme.fg("accent", icon));
+	});
+});
+
 describe("status line model segment advisor badge", () => {
 	it("appends a success-colored ++ badge when all advisors run", () => {
 		const rendered = renderSegment("model", createModelContext(true));

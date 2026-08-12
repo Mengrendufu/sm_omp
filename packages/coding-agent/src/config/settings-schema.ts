@@ -968,6 +968,80 @@ export const SETTINGS_SCHEMA = {
 				"Wrap paths and URLs in OSC 8 hyperlinks for terminal-native click-to-open (auto: detect support; off: never; always: unconditional)",
 		},
 	},
+	"tui.layout": {
+		type: "enum",
+		values: ["panes", "fixed", "native"] as const,
+		default: "fixed",
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Conversation Layout",
+			description:
+				"Panes shows conversation, prompt, and Todo/Subagents as independent regions; Fixed pins only the prompt; Native uses terminal scrollback. Restart OMP after changing this setting.",
+			options: [
+				{
+					value: "panes",
+					label: "Conversation Panes",
+					description: "Independent conversation, prompt, and Todo/Subagent regions",
+				},
+				{
+					value: "fixed",
+					label: "Fixed Prompt",
+					description: "Scroll conversation independently above the prompt",
+				},
+				{ value: "native", label: "Native Scrollback", description: "Keep the prompt in terminal scrollback" },
+			],
+		},
+	},
+	"tui.panes.sidebarWidth": {
+		type: "number",
+		default: 36,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Pane Sidebar Width",
+			description: "Sidebar width in terminal columns",
+			options: [
+				{ value: "28", label: "28 columns" },
+				{ value: "36", label: "36 columns", description: "Default." },
+				{ value: "44", label: "44 columns" },
+				{ value: "52", label: "52 columns" },
+			],
+		},
+	},
+	"tui.panes.inputMaxHeight": {
+		type: "number",
+		default: 12,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Pane Input Height",
+			description: "Maximum prompt-region height in terminal rows",
+			options: [
+				{ value: "8", label: "8 rows" },
+				{ value: "12", label: "12 rows", description: "Default." },
+				{ value: "16", label: "16 rows" },
+				{ value: "20", label: "20 rows" },
+			],
+		},
+	},
+	"tui.panes.narrowWidth": {
+		type: "number",
+		default: 100,
+		ui: {
+			tab: "appearance",
+			group: "Display",
+			label: "Pane Compact Width",
+			description: "Hide the sidebar below this terminal width",
+			options: [
+				{ value: "80", label: "80 columns" },
+				{ value: "100", label: "100 columns", description: "Default." },
+				{ value: "120", label: "120 columns" },
+				{ value: "140", label: "140 columns" },
+			],
+		},
+	},
+
 	"tui.tight": {
 		type: "boolean",
 		default: false,

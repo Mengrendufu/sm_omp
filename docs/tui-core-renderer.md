@@ -7,6 +7,8 @@ maps the _flow_ (input → component tree → render); this doc explains the
 violate**. Scope is the core engine only:
 
 - [`packages/tui/src/tui.ts`](../packages/tui/src/tui.ts) — frame pipeline, commit ledger, window math, emitters, cursor placement.
+- [`packages/tui/src/fullscreen.ts`](../packages/tui/src/fullscreen.ts) — persistent alternate-screen transcript viewport and pinned-dock geometry.
+- [`packages/tui/src/panes.ts`](../packages/tui/src/panes.ts) — three-region pane geometry, independent conversation/sidebar viewport state, compact sidebar policy, and pane-owned terminal-cell selection.
 - [`packages/tui/src/terminal.ts`](../packages/tui/src/terminal.ts) — `ProcessTerminal`, capability probes, private-CSI reassembly.
 - [`packages/tui/src/terminal-capabilities.ts`](../packages/tui/src/terminal-capabilities.ts) — `TERMINAL` profile, sync-output / DECCARA / image detection.
 - [`packages/tui/src/stdin-buffer.ts`](../packages/tui/src/stdin-buffer.ts) — escape-sequence reassembly.
@@ -15,10 +17,11 @@ violate**. Scope is the core engine only:
 - [`packages/tui/src/deccara.ts`](../packages/tui/src/deccara.ts) — rectangular-fill optimizer.
 
 Application-layer renderers (transcript, tool calls, session tree, editor,
-widgets) are **out of scope** — they live in `packages/coding-agent`. The one
-app-layer file that is load-bearing for this contract is
-[`transcript-container.ts`](../packages/coding-agent/src/modes/components/transcript-container.ts),
-which implements the commit-boundary seam described below.
+widgets) live in `packages/coding-agent`. Two app-layer contracts are
+load-bearing here: [`transcript-container.ts`](../packages/coding-agent/src/modes/components/transcript-container.ts)
+implements the normal-screen commit boundary, while `InteractiveMode` supplies
+the Conversation/Input/Sidebar roots to `TUI.enterPanes()` without changing
+their underlying message, editor, Todo, or Subagent ownership.
 
 ---
 
@@ -35,8 +38,15 @@ which implements the commit-boundary seam described below.
 > content no longer matches committed history (§2); it does not probe viewport
 > position.
 
-We keep the transcript on the **normal screen** (native scrollback, native
-selection, transcript persists after exit). The engine maintains one ledger:
+The renderer also supports an application-owned persistent alternate-screen
+layout through `TUI.enterFullscreen()`. In that mode `FullscreenViewport`
+owns conversation scroll position, composes a terminal-height frame, and pins
+the supplied dock at the bottom. This is distinct from temporary fullscreen
+overlays. `TUI.exitFullscreen()` returns to the native-scrollback renderer.
+
+Outside that persistent layout, we keep the transcript on the **normal screen**
+(native scrollback, native selection, transcript persists after exit). The
+engine maintains one ledger:
 
 - **`committedRows` (C)** — frame rows `[0, C)` have entered terminal history.
   Ordinary emitters never rewrite them. An opt-in destructive divergence replay

@@ -27,6 +27,24 @@ export interface Keybindings {
 	"tui.editor.yank": true;
 	"tui.editor.yankPop": true;
 	"tui.editor.undo": true;
+	// Persistent fullscreen transcript viewport
+	"tui.viewport.pageUp": true;
+	"tui.viewport.pageDown": true;
+	"tui.viewport.top": true;
+	"tui.viewport.follow": true;
+	// Persistent multi-pane navigation
+	"tui.panes.focusNext": true;
+	"tui.panes.focusLeft": true;
+	"tui.panes.focusRight": true;
+	"tui.panes.scrollUp": true;
+	"tui.panes.scrollDown": true;
+	"tui.panes.halfPageUp": true;
+	"tui.panes.halfPageDown": true;
+	"tui.panes.pageUp": true;
+	"tui.panes.pageDown": true;
+	"tui.panes.top": true;
+	"tui.panes.bottom": true;
+	"tui.panes.toggleSidebar": true;
 	// Generic input actions
 	"tui.input.newLine": true;
 	"tui.input.submit": true;
@@ -91,6 +109,22 @@ export const TUI_KEYBINDINGS = {
 	},
 	"tui.editor.pageUp": { defaultKeys: "pageUp", description: "Page up" },
 	"tui.editor.pageDown": { defaultKeys: "pageDown", description: "Page down" },
+	"tui.viewport.pageUp": { defaultKeys: "pageUp", description: "Scroll transcript up one page" },
+	"tui.viewport.pageDown": { defaultKeys: "pageDown", description: "Scroll transcript down one page" },
+	"tui.viewport.top": { defaultKeys: "alt+shift+up", description: "Scroll transcript to the top" },
+	"tui.viewport.follow": { defaultKeys: "ctrl+shift+down", description: "Follow the latest transcript output" },
+	"tui.panes.focusNext": { defaultKeys: "tab", description: "Focus the next pane" },
+	"tui.panes.focusLeft": { defaultKeys: ["h", "left"], description: "Focus the pane to the left" },
+	"tui.panes.focusRight": { defaultKeys: ["l", "right"], description: "Focus the pane to the right" },
+	"tui.panes.scrollUp": { defaultKeys: ["k", "up"], description: "Scroll the focused pane up" },
+	"tui.panes.scrollDown": { defaultKeys: ["j", "down"], description: "Scroll the focused pane down" },
+	"tui.panes.halfPageUp": { defaultKeys: "u", description: "Scroll the focused pane up half a page" },
+	"tui.panes.halfPageDown": { defaultKeys: "d", description: "Scroll the focused pane down half a page" },
+	"tui.panes.pageUp": { defaultKeys: "pageUp", description: "Scroll the focused pane up one page" },
+	"tui.panes.pageDown": { defaultKeys: "pageDown", description: "Scroll the focused pane down one page" },
+	"tui.panes.top": { defaultKeys: "g", description: "Scroll the focused pane to the top" },
+	"tui.panes.bottom": { defaultKeys: "shift+g", description: "Scroll the focused pane to the bottom" },
+	"tui.panes.toggleSidebar": { defaultKeys: "ctrl+shift+b", description: "Toggle the sidebar pane" },
 	"tui.editor.deleteCharBackward": {
 		defaultKeys: "backspace",
 		description: "Delete character backward",

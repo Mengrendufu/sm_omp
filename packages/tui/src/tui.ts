@@ -20,8 +20,12 @@ import { performance } from "node:perf_hooks";
 import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
 import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./components/image";
 import { planDeccaraFills } from "./deccara";
+import { FullscreenViewport, type ScrollInfo } from "./fullscreen";
+import { getKeybindings } from "./keybindings";
 import { isKeyRelease, matchesKey } from "./keys";
 import { LoopWatchdog } from "./loop-watchdog";
+import { routeSgrMouseInput } from "./mouse";
+import { type PaneFocus, type PaneScrollInfo, PanesViewport, type PanesViewportOptions } from "./panes";
 import { isConPTYHosted, setAltScreenActive, type Terminal } from "./terminal";
 import {
 	encodeKittyDeleteImage,
@@ -83,13 +87,13 @@ const CURSOR_BEGIN = `${HIDE_CURSOR}${SYNC_OUTPUT_BEGIN}`;
 const CURSOR_BEGIN_NO_SYNC = HIDE_CURSOR;
 const CURSOR_END = SYNC_OUTPUT_END;
 const CURSOR_END_NO_SYNC = "";
-// Mouse reporting is scoped to fullscreen overlays that opt into pointer
-// interaction. 1000h = button click tracking, 1003h = any-motion tracking for
-// hover targets, and 1006h = SGR extended coordinates past column/row 223.
-// Selection-first overlays leave these modes disabled so the terminal retains
-// native text selection.
+// Persistent panes need button-drag reports for region-owned text selection
+// without the idle hover flood of any-motion tracking. 1002h = button-motion,
+// 1003h = any-motion, and 1006h = SGR extended coordinates.
+const PANES_MOUSE_TRACKING_ON = "\x1b[?1002h\x1b[?1006h";
 const MOUSE_TRACKING_ON = "\x1b[?1000h\x1b[?1003h\x1b[?1006h";
-const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1003l\x1b[?1000l";
+const MOUSE_TRACKING_OFF = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+type AltMouseTrackingMode = "off" | "buttons" | "motion";
 const ALT_SCREEN_ENTER = "\x1b[?1049h";
 const ALT_SCREEN_EXIT = "\x1b[?1049l";
 
@@ -114,6 +118,23 @@ export interface TUIOptions {
 export interface TUIStartOptions {
 	/** Clear saved native scrollback before the first paint. */
 	clearScrollback?: boolean;
+}
+
+export interface FullscreenOptions {
+	scroll: readonly Component[];
+	dock: Component;
+	viewportControls?: boolean;
+}
+
+export interface PanesOptions extends PanesViewportOptions {
+	conversation: Component;
+	input: Component;
+	inputFocus: Component;
+	/** Whether pane navigation may move focus away from the designated input component. */
+	canLeaveInput?: () => boolean;
+	/** Receives the visible text when a pane-owned mouse drag is released. */
+	onCopySelection?: (text: string) => void;
+	sidebar: Component;
 }
 
 const DEFAULT_RENDER_SCHEDULER: RenderScheduler = {
@@ -498,6 +519,7 @@ export class Container implements Component, NativeScrollbackCommittedRows, Nati
 	// on invalidate().
 	#memoLines: string[] | undefined;
 	#memoChildLines: (readonly string[])[] = [];
+	#memoChildLengths: number[] = [];
 	#memoWidth = -1;
 
 	#ignoreTight = false;
@@ -589,16 +611,32 @@ export class Container implements Component, NativeScrollbackCommittedRows, Nati
 		const children = this.children;
 		const count = children.length;
 		let refs = this.#memoChildLines;
-		let unchanged = this.#memoLines !== undefined && this.#memoWidth === width && refs.length === count;
+		let lengths = this.#memoChildLengths;
+		let unchanged =
+			this.#memoLines !== undefined &&
+			this.#memoWidth === width &&
+			refs.length === count &&
+			lengths.length === count;
 		if (refs.length !== count) {
 			refs = new Array(count);
 			this.#memoChildLines = refs;
 		}
+		if (lengths.length !== count) {
+			lengths = new Array(count);
+			this.#memoChildLengths = lengths;
+		}
 		for (let i = 0; i < count; i++) {
-			const childLines = children[i]!.render(width);
-			if (refs[i] !== childLines) {
+			const child = children[i]!;
+			const childLines = child.render(width);
+			const stablePrefix = getRenderStablePrefixRows(child);
+			if (
+				refs[i] !== childLines ||
+				lengths[i] !== childLines.length ||
+				(stablePrefix !== undefined && stablePrefix < childLines.length)
+			) {
 				unchanged = false;
 				refs[i] = childLines;
+				lengths[i] = childLines.length;
 			}
 		}
 		this.#memoWidth = width;
@@ -1120,13 +1158,39 @@ export class TUI extends Container {
 	// untouched, so exiting reconciles cleanly against the terminal-restored
 	// normal screen. #altPreviousLines is the last alt frame, for repaint-skip.
 	#altActive = false;
-	#altMouseTrackingActive = false;
+	#altMouseTrackingMode: AltMouseTrackingMode = "off";
 	#altPreviousLines: string[] = [];
 	#altEnterWidth = 0;
 	#altEnterHeight = 0;
 	// Holds an alternate-screen exit until its replacement full paint can emit it
 	// atomically. It must survive a deferred Ghostty image frame.
 	#pendingAltExit = "";
+
+	// Persistent alternate-screen layout. Unlike a fullscreen overlay, this
+	// keeps the transcript visible and pins the supplied dock to the bottom.
+	#fullscreen:
+		| {
+				scroll: readonly Component[];
+				dock: Component;
+				viewportControls: boolean;
+				viewport: FullscreenViewport;
+		  }
+		| undefined;
+
+	// Persistent alternate-screen multi-pane layout. The three roots own
+	// independent geometry while the prompt input remains a real focused
+	// component rather than a copied editor state.
+	#panes:
+		| {
+				conversation: Component;
+				input: Component;
+				inputFocus: Component;
+				canLeaveInput: (() => boolean) | undefined;
+				sidebar: Component;
+				onCopySelection: ((text: string) => void) | undefined;
+				viewport: PanesViewport;
+		  }
+		| undefined;
 
 	// Persistent composed frame. The render override splices only rows at/after
 	// the stable prefix each frame; cursor markers are stripped at ingestion so
@@ -1183,6 +1247,115 @@ export class TUI extends Container {
 		this.#renderScheduler = options?.renderScheduler ?? DEFAULT_RENDER_SCHEDULER;
 		this.#showHardwareCursor = showHardwareCursor === undefined ? this.#showHardwareCursor : showHardwareCursor;
 		this.#watchdog = new LoopWatchdog();
+	}
+
+	/** Enable the persistent alternate-screen transcript viewport. */
+	enterFullscreen(options: FullscreenOptions): void {
+		if (this.#panes) throw new Error("Fullscreen and panes layouts are mutually exclusive");
+		const dockIndex = this.children.indexOf(options.dock);
+		const ownsSingleRootGraph =
+			dockIndex === this.children.length - 1 &&
+			options.scroll.length === dockIndex &&
+			options.scroll.every((component, index) => this.children[index] === component);
+		if (!ownsSingleRootGraph) {
+			throw new Error("Fullscreen scroll and dock components must be the TUI root children in display order");
+		}
+		this.#fullscreen = {
+			scroll: options.scroll,
+			dock: options.dock,
+			viewportControls: options.viewportControls ?? true,
+			viewport: new FullscreenViewport(),
+		};
+		this.requestRender(true);
+	}
+
+	/** Return to the ordinary append-only native-scrollback renderer. */
+	exitFullscreen(): void {
+		if (!this.#fullscreen) return;
+		this.#fullscreen = undefined;
+		this.requestRender(true);
+	}
+
+	/** Enable the persistent alternate-screen conversation/input/sidebar layout. */
+	enterPanes(options: PanesOptions): void {
+		const ownsPaneGraph =
+			this.children.length === 3 &&
+			this.children[0] === options.conversation &&
+			this.children[1] === options.input &&
+			this.children[2] === options.sidebar;
+		if (!ownsPaneGraph) {
+			throw new Error("Panes components must be the only TUI root children in conversation/input/sidebar order");
+		}
+		if (!this.#componentInTree(options.input, options.inputFocus)) {
+			throw new Error("Panes inputFocus must belong to the input component tree");
+		}
+		if (this.#fullscreen) throw new Error("Fullscreen and panes layouts are mutually exclusive");
+		this.#panes = {
+			conversation: options.conversation,
+			input: options.input,
+			inputFocus: options.inputFocus,
+			canLeaveInput: options.canLeaveInput,
+			onCopySelection: options.onCopySelection,
+			sidebar: options.sidebar,
+			viewport: new PanesViewport(options),
+		};
+		this.#panes.viewport.setFocus("input");
+		this.requestRender(true);
+	}
+
+	/** Return from the multi-pane layout to the ordinary renderer. */
+	exitPanes(): void {
+		if (!this.#panes) return;
+		this.#panes = undefined;
+		this.requestRender(true);
+	}
+
+	isPanes(): boolean {
+		return this.#panes !== undefined;
+	}
+
+	getPaneFocus(): PaneFocus | undefined {
+		return this.#panes?.viewport.focus();
+	}
+
+	getPaneScrollInfo(pane: "conversation" | "sidebar"): PaneScrollInfo | undefined {
+		return this.#panes?.viewport.scrollInfo(pane);
+	}
+
+	setPanesSidebarStatus(status: string | undefined): void {
+		const panes = this.#panes;
+		if (!panes?.viewport.setSidebarStatus(status)) return;
+		this.requestRender();
+	}
+
+	setPanesInputFocus(component: Component): void {
+		const panes = this.#panes;
+		if (!panes) return;
+		if (!this.#componentInTree(panes.input, component)) {
+			throw new Error("Panes input focus must belong to the input component tree");
+		}
+		panes.inputFocus = component;
+	}
+
+	togglePanesSidebar(): void {
+		const panes = this.#panes;
+		if (!panes) return;
+		panes.viewport.toggleSidebar();
+		this.#focusPaneComponent(panes.viewport.focus());
+		this.requestRender();
+	}
+	isFullscreen(): boolean {
+		return this.#fullscreen !== undefined;
+	}
+
+	getScrollInfo(): ScrollInfo | undefined {
+		return this.#fullscreen?.viewport.scrollInfo();
+	}
+
+	/** Follow the latest transcript after an authoritative session replacement. */
+	resetFullscreenViewport(): void {
+		this.#fullscreen?.viewport.scrollToBottom();
+		this.#panes?.viewport.scrollToBottom("conversation");
 	}
 
 	override render(width: number): readonly string[] {
@@ -1441,6 +1614,24 @@ export class TUI extends Container {
 		return TERMINAL.deccara && this.#synchronizedOutputEnabled;
 	}
 
+	#componentInTree(root: Component, target: Component): boolean {
+		if (root === target) return true;
+		if (!(root instanceof Container)) return false;
+		for (const child of root.children) {
+			if (this.#componentInTree(child, target)) return true;
+		}
+		return false;
+	}
+
+	#focusPaneComponent(pane: PaneFocus): void {
+		const panes = this.#panes;
+		if (!panes) return;
+		const component =
+			pane === "input" ? panes.inputFocus : pane === "conversation" ? panes.conversation : panes.sidebar;
+		panes.viewport.setFocus(pane);
+		this.setFocus(component);
+	}
+
 	setFocus(component: Component | null): void {
 		const topVisibleOverlay = this.#getTopmostVisibleOverlay();
 		if (topVisibleOverlay && !isOverlayFocusTarget(topVisibleOverlay.component, component)) {
@@ -1463,6 +1654,13 @@ export class TUI extends Container {
 		if (isFocusable(component)) {
 			component.focused = true;
 			this.#syncTerminalCursorMode(component);
+		}
+
+		const panes = this.#panes;
+		if (panes && component) {
+			if (this.#componentInTree(panes.input, component)) panes.viewport.setFocus("input");
+			else if (this.#componentInTree(panes.conversation, component)) panes.viewport.setFocus("conversation");
+			else if (this.#componentInTree(panes.sidebar, component)) panes.viewport.setFocus("sidebar");
 		}
 	}
 
@@ -1830,12 +2028,12 @@ export class TUI extends Container {
 			this.terminal.write(this.#leaveResizeAltSequence());
 		}
 		if (this.#altActive || this.#pendingAltExit) {
-			const mouseExit = this.#altMouseTrackingActive ? MOUSE_TRACKING_OFF : "";
+			const mouseExit = this.#altMouseTrackingMode !== "off" ? MOUSE_TRACKING_OFF : "";
 			const exitSequence = this.#pendingAltExit || `${mouseExit}${this.#keyboardEnhancementExit()}\x1b[?1049l`;
 			this.terminal.write(exitSequence);
 			setAltScreenActive(false);
 			this.#altActive = false;
-			this.#altMouseTrackingActive = false;
+			this.#altMouseTrackingMode = "off";
 			this.#altPreviousLines = [];
 			this.#pendingAltExit = "";
 		}
@@ -2224,6 +2422,29 @@ export class TUI extends Container {
 		return roots;
 	}
 
+	/** Resolve component-scoped roots without native-scrollback state gates. */
+	#resolveFullscreenPartialComposeRoots(width: number): Set<Component> | null {
+		if (this.#componentRenderTargets.size === 0 || this.#resizeEventPending) return null;
+		if (width !== this.#composeWidth || this.#clearScrollbackOnNextRender || this.#forceViewportRepaintOnNextRender) {
+			return null;
+		}
+		if (this.overlayStack.length > 0) return null;
+		const children = this.children;
+		const segments = this.#frameSegments;
+		if (segments.length !== children.length) return null;
+		for (let i = 0; i < children.length; i++) {
+			if (segments[i]!.component !== children[i]) return null;
+		}
+		const roots = this.#partialComposeRootsScratch;
+		roots.clear();
+		for (const target of this.#componentRenderTargets) {
+			const root = this.#resolveComponentRoot(target);
+			if (root === null) return null;
+			roots.add(root);
+		}
+		return roots;
+	}
+
 	/** Root child whose subtree contains `target`, memoized per component. */
 	#resolveComponentRoot(target: Component): Component | null {
 		const cached = this.#componentRootCache.get(target);
@@ -2440,12 +2661,15 @@ export class TUI extends Container {
 		if (this.#consumeCellSizeResponse(data)) {
 			return;
 		}
+		if (this.#handlePanesInput(data)) return;
 
 		// Global debug key handler (Shift+Ctrl+D)
 		if (matchesKey(data, "shift+ctrl+d") && this.onDebug) {
 			this.onDebug();
 			return;
 		}
+
+		if (this.#handleFullscreenInput(data)) return;
 
 		// If focused component is an overlay, verify it's still visible
 		// (visibility can change due to terminal resize or visible() callback)
@@ -2479,6 +2703,132 @@ export class TUI extends Container {
 				this.requestRender();
 			}
 		}
+	}
+	#handlePanesInput(data: string): boolean {
+		const panes = this.#panes;
+		if (!panes) return false;
+		const overlayFocused = this.overlayStack.some(
+			entry => this.#isOverlayVisible(entry) && isOverlayFocusTarget(entry.component, this.#focusedComponent),
+		);
+		if (overlayFocused) {
+			if (panes.viewport.clearSelection()) this.requestRender();
+			return false;
+		}
+		if (data.startsWith("\x1b[<")) {
+			return routeSgrMouseInput(data, event => {
+				if (event.wheel !== null) {
+					panes.viewport.scrollBy("conversation", event.wheel * 3);
+					this.requestRender();
+				} else if (event.leftClick) {
+					panes.viewport.beginSelection(event.col, event.row);
+					this.requestRender();
+				} else if (event.motion && (event.button & 3) === 0) {
+					if (panes.viewport.updateSelection(event.col, event.row)) this.requestRender();
+				} else if (event.release && (event.button & 3) === 0) {
+					const text = panes.viewport.finishSelection(event.col, event.row);
+					if (text !== undefined) panes.onCopySelection?.(text);
+					this.requestRender();
+				}
+				// Consume every pane-tracking report so it cannot reach the editor.
+				return true;
+			});
+		}
+		if (panes.viewport.clearSelection()) this.requestRender();
+
+		const keybindings = getKeybindings();
+		if (keybindings.matches(data, "tui.panes.toggleSidebar")) {
+			this.togglePanesSidebar();
+			return true;
+		}
+		if (matchesKey(data, "escape") && panes.viewport.closeSidebarOverlay()) {
+			this.#focusPaneComponent(panes.viewport.focus());
+			this.requestRender();
+			return true;
+		}
+
+		const focus = panes.viewport.focus();
+		if (focus === "input" && this.#focusedComponent !== panes.inputFocus) return false;
+		if (keybindings.matches(data, "tui.panes.focusNext")) {
+			if (focus === "input" && panes.canLeaveInput?.() === false) return false;
+			const next = focus === "input" ? "conversation" : "input";
+			this.#focusPaneComponent(next);
+		} else if (focus === "sidebar" && keybindings.matches(data, "tui.panes.focusLeft")) {
+			this.#focusPaneComponent("conversation");
+		} else if (
+			focus === "conversation" &&
+			panes.viewport.sidebarMode() !== "hidden" &&
+			keybindings.matches(data, "tui.panes.focusRight")
+		) {
+			this.#focusPaneComponent("sidebar");
+		} else if (focus === "input" && matchesKey(data, "ctrl+alt+y")) {
+			panes.viewport.scrollBy("conversation", -1);
+		} else if (focus === "input" && matchesKey(data, "ctrl+alt+e")) {
+			panes.viewport.scrollBy("conversation", 1);
+		} else if (focus === "input" && matchesKey(data, "ctrl+alt+u")) {
+			panes.viewport.scrollHalfPage("conversation", -1);
+		} else if (focus === "input" && matchesKey(data, "ctrl+alt+d")) {
+			panes.viewport.scrollHalfPage("conversation", 1);
+		} else if (
+			focus === "input" &&
+			(keybindings.matches(data, "tui.panes.pageUp") || matchesKey(data, "ctrl+alt+b"))
+		) {
+			panes.viewport.scrollPage("conversation", -1);
+		} else if (
+			focus === "input" &&
+			(keybindings.matches(data, "tui.panes.pageDown") || matchesKey(data, "ctrl+alt+f"))
+		) {
+			panes.viewport.scrollPage("conversation", 1);
+		} else if (focus === "input" && matchesKey(data, "ctrl+g")) {
+			panes.viewport.scrollToTop("conversation");
+		} else if (focus === "input" && matchesKey(data, "ctrl+alt+g")) {
+			panes.viewport.scrollToBottom("conversation");
+		} else if (focus === "input") {
+			return false;
+		} else if (keybindings.matches(data, "tui.panes.scrollUp")) {
+			panes.viewport.scrollBy(focus, -1);
+		} else if (keybindings.matches(data, "tui.panes.scrollDown")) {
+			panes.viewport.scrollBy(focus, 1);
+		} else if (keybindings.matches(data, "tui.panes.halfPageUp")) {
+			panes.viewport.scrollHalfPage(focus, -1);
+		} else if (keybindings.matches(data, "tui.panes.halfPageDown")) {
+			panes.viewport.scrollHalfPage(focus, 1);
+		} else if (keybindings.matches(data, "tui.panes.pageUp")) {
+			panes.viewport.scrollPage(focus, -1);
+		} else if (keybindings.matches(data, "tui.panes.pageDown")) {
+			panes.viewport.scrollPage(focus, 1);
+		} else if (keybindings.matches(data, "tui.panes.top")) {
+			panes.viewport.scrollToTop(focus);
+		} else if (keybindings.matches(data, "tui.panes.bottom")) {
+			panes.viewport.scrollToBottom(focus);
+		} else {
+			return false;
+		}
+		this.requestRender();
+		return true;
+	}
+
+	#handleFullscreenInput(data: string): boolean {
+		const fullscreen = this.#fullscreen;
+		if (!fullscreen?.viewportControls) return false;
+		const overlayFocused = this.overlayStack.some(
+			entry => this.#isOverlayVisible(entry) && isOverlayFocusTarget(entry.component, this.#focusedComponent),
+		);
+		if (overlayFocused) return false;
+
+		const keybindings = getKeybindings();
+		if (keybindings.matches(data, "tui.viewport.pageUp")) {
+			fullscreen.viewport.scrollBy(-fullscreen.viewport.pageSize());
+		} else if (keybindings.matches(data, "tui.viewport.pageDown")) {
+			fullscreen.viewport.scrollBy(fullscreen.viewport.pageSize());
+		} else if (keybindings.matches(data, "tui.viewport.top")) {
+			fullscreen.viewport.scrollToTop();
+		} else if (keybindings.matches(data, "tui.viewport.follow")) {
+			fullscreen.viewport.scrollToBottom();
+		} else {
+			return false;
+		}
+		this.requestRender();
+		return true;
 	}
 
 	#consumeCellSizeResponse(data: string): boolean {
@@ -2861,31 +3211,43 @@ export class TUI extends Container {
 		const componentScopedOnly = this.#pendingRenderComponentsOnly;
 		this.#pendingRenderComponentsOnly = false;
 
-		// Fullscreen alt-screen short-circuit. While the topmost visible overlay
-		// requests it, borrow the terminal's alternate buffer and paint only the
-		// modal there; the normal screen and all accounting stay untouched.
+		// Persistent fixed layout and fullscreen overlays share alternate-screen
+		// ownership. Fixed layout paints transcript + dock; without it, a
+		// fullscreen overlay retains the legacy blank-base modal behavior.
 		let deferredAltExit = this.#pendingAltExit;
 		const topOverlay = this.#getTopmostVisibleOverlay();
-		const wantAlt = topOverlay?.options?.fullscreen === true;
-		const wantMouseTracking = wantAlt && topOverlay.options?.mouseTracking !== false;
+		const overlayWantsAlt = topOverlay?.options?.fullscreen === true;
+		const wantAlt = this.#fullscreen !== undefined || this.#panes !== undefined || overlayWantsAlt;
+		const wantMouseTracking: AltMouseTrackingMode = overlayWantsAlt
+			? topOverlay.options?.mouseTracking === false
+				? "off"
+				: "motion"
+			: this.#panes
+				? "buttons"
+				: "off";
 		if (wantAlt && !this.#altActive) {
 			// Enhanced keyboard modes can be buffer-local: re-push the active
 			// modified-key reporting sequence on the freshly entered alternate
 			// screen, or Esc/modified keys revert to legacy encoding inside
 			// fullscreen overlays (Ghostty/kitty/iTerm2).
-			const mouseEnter = wantMouseTracking ? MOUSE_TRACKING_ON : "";
+			const mouseEnter =
+				wantMouseTracking === "motion"
+					? MOUSE_TRACKING_ON
+					: wantMouseTracking === "buttons"
+						? PANES_MOUSE_TRACKING_ON
+						: "";
 			this.terminal.write(`\x1b[?1049h${this.#keyboardEnhancementEnter()}${mouseEnter}`);
 			setAltScreenActive(true);
 			this.terminal.hideCursor();
 			this.#forgetHardwareCursorState();
 			this.#recordHardwareCursorHidden();
 			this.#altActive = true;
-			this.#altMouseTrackingActive = wantMouseTracking;
+			this.#altMouseTrackingMode = wantMouseTracking;
 			this.#altPreviousLines = [];
 			this.#altEnterWidth = width;
 			this.#altEnterHeight = height;
 		} else if (!wantAlt && this.#altActive) {
-			const mouseExit = this.#altMouseTrackingActive ? MOUSE_TRACKING_OFF : "";
+			const mouseExit = this.#altMouseTrackingMode !== "off" ? MOUSE_TRACKING_OFF : "";
 			const enhancementExit = this.#keyboardEnhancementExit();
 			const exitSequence = `${mouseExit}${enhancementExit}\x1b[?1049l`;
 			// Session replacement can finish while a fullscreen selector is still
@@ -2899,7 +3261,7 @@ export class TUI extends Container {
 			setAltScreenActive(false);
 			this.#forgetHardwareCursorState();
 			this.#altActive = false;
-			this.#altMouseTrackingActive = false;
+			this.#altMouseTrackingMode = "off";
 			this.#altPreviousLines = [];
 			// A resize while on the alt buffer reflowed the terminal's saved
 			// normal screen; it no longer matches our accounting, so force the
@@ -2913,13 +3275,24 @@ export class TUI extends Container {
 				this.#resizeEventPending = true;
 				if (width === this.#altEnterWidth) this.#altToggleResizesInPlace = true;
 			}
-		} else if (wantMouseTracking !== this.#altMouseTrackingActive) {
-			this.terminal.write(wantMouseTracking ? MOUSE_TRACKING_ON : MOUSE_TRACKING_OFF);
-			this.#altMouseTrackingActive = wantMouseTracking;
+		} else if (wantMouseTracking !== this.#altMouseTrackingMode) {
+			const mouseExit = this.#altMouseTrackingMode === "off" ? "" : MOUSE_TRACKING_OFF;
+			const mouseEnter =
+				wantMouseTracking === "motion"
+					? MOUSE_TRACKING_ON
+					: wantMouseTracking === "buttons"
+						? PANES_MOUSE_TRACKING_ON
+						: "";
+			this.terminal.write(`${mouseExit}${mouseEnter}`);
+			this.#altMouseTrackingMode = wantMouseTracking;
 		}
 		if (this.#altActive) {
-			this.#componentRenderTargets.clear();
-			this.#renderAltFrame(width, height);
+			if (this.#panes) this.#renderPanesFrame(width, height);
+			else if (this.#fullscreen) this.#renderFullscreenFrame(width, height, componentScopedOnly);
+			else {
+				this.#componentRenderTargets.clear();
+				this.#renderAltFrame(width, height);
+			}
 			return;
 		}
 
@@ -3552,11 +3925,20 @@ export class TUI extends Container {
 		return col;
 	}
 
-	#lineRewriteSequence(line: string, width: number, screenRow = -1, frameRow = -1, committedTo = -1): string {
+	#lineRewriteSequence(
+		line: string,
+		width: number,
+		screenRow = -1,
+		frameRow = -1,
+		committedTo = -1,
+		clearWholeRow = false,
+	): string {
 		if (TERMINAL.isImageLine(line)) {
-			return ERASE_LINE + this.#imageLineSequence(line, screenRow, frameRow, committedTo);
+			const erase = clearWholeRow ? SEGMENT_RESET + ERASE_LINE : ERASE_LINE;
+			return erase + this.#imageLineSequence(line, screenRow, frameRow, committedTo);
 		}
 		const terminalLine = this.#terminalLine(line);
+		if (clearWholeRow) return SEGMENT_RESET + ERASE_LINE + terminalLine;
 		const asciiWidth = this.#ansiAsciiLineWidth(line, width);
 		if (asciiWidth !== undefined) {
 			// Exact width model: skip the erase only when the row truly fills
@@ -4003,6 +4385,88 @@ export class TUI extends Container {
 		this.terminal.write(buffer);
 	}
 
+	/** Compose and paint the persistent conversation/input/sidebar frame. */
+	#renderPanesFrame(width: number, height: number): void {
+		const panes = this.#panes;
+		if (!panes) return;
+		this.#componentRenderTargets.clear();
+		const contentWidths = panes.viewport.contentWidths(width);
+		if (panes.viewport.sidebarMode() === "hidden" && panes.viewport.focus() === "sidebar") {
+			this.#focusPaneComponent("input");
+		}
+		const content = this.#imageBudget.withGraphicsSuppressed(() => ({
+			conversation: panes.conversation.render(contentWidths.conversation),
+			input: panes.input.render(contentWidths.input),
+			sidebar: panes.viewport.sidebarMode() === "hidden" ? [] : panes.sidebar.render(contentWidths.sidebar),
+		}));
+		this.#resizeEventPending = false;
+		this.#clearScrollbackOnNextRender = false;
+
+		if (this.overlayStack.length > 0) panes.viewport.clearSelection();
+		let frame = panes.viewport.composeFrame(content, width, height).lines;
+		let cursorPos = this.#extractCursorMarkers(frame)[0] ?? null;
+		frame = panes.viewport.renderSelection(frame);
+		if (this.overlayStack.length > 0) {
+			frame = this.#compositeOverlaysIntoWindow(frame, width, height);
+			cursorPos = this.#extractCursorMarkers(frame)[0] ?? cursorPos;
+		}
+		frame = this.#prepareLinesArray(frame, width);
+		this.#emitAltFrame(frame, width, height, cursorPos);
+	}
+
+	/** Compose transcript and dock into the persistent fixed-grid frame. */
+	#renderFullscreenFrame(width: number, height: number, componentScopedOnly: boolean): void {
+		const fullscreen = this.#fullscreen;
+		if (!fullscreen) return;
+
+		const partialRoots = componentScopedOnly ? this.#resolveFullscreenPartialComposeRoots(width) : null;
+		this.#componentRenderTargets.clear();
+		let rawFrame: readonly string[];
+		if (partialRoots !== null) {
+			this.#partialComposeRoots = partialRoots;
+			try {
+				rawFrame = this.#imageBudget.withGraphicsSuppressed(() => this.render(width));
+			} finally {
+				this.#partialComposeRoots = null;
+			}
+		} else {
+			rawFrame = this.#imageBudget.withGraphicsSuppressed(() => this.render(width));
+		}
+		this.#resizeEventPending = false;
+		this.#clearScrollbackOnNextRender = false;
+
+		const dockSegment = this.#frameSegments.at(-1);
+		if (!dockSegment || dockSegment.component !== fullscreen.dock) {
+			throw new Error("Fullscreen dock must remain the final TUI root component");
+		}
+		const dockStart = dockSegment.start;
+		let focusedDockRow: number | undefined;
+		for (let index = this.#frameCursorMarkers.length - 1; index >= 0; index--) {
+			const marker = this.#frameCursorMarkers[index]!;
+			if (marker.row >= dockStart) {
+				focusedDockRow = marker.row;
+				break;
+			}
+		}
+
+		let frame = fullscreen.viewport.composeFrame(rawFrame, dockStart, height, focusedDockRow);
+		let cursorPos: { row: number; col: number } | null = null;
+		if (this.overlayStack.length > 0) {
+			frame = this.#compositeOverlaysIntoWindow(frame, width, height);
+			cursorPos = this.#extractCursorMarkers(frame)[0] ?? null;
+		} else {
+			for (let index = this.#frameCursorMarkers.length - 1; index >= 0; index--) {
+				const marker = this.#frameCursorMarkers[index]!;
+				const row = fullscreen.viewport.screenRowForFrameRow(marker.row);
+				if (row === undefined) continue;
+				cursorPos = { row, col: marker.col };
+				break;
+			}
+		}
+		frame = this.#prepareLinesArray(frame, width);
+		this.#emitAltFrame(frame, width, height, cursorPos);
+	}
+
 	/**
 	 * Compose and paint a single fullscreen overlay frame on the alt buffer.
 	 * Cursor markers are stripped (the modal draws its own in-band caret and
@@ -4019,24 +4483,27 @@ export class TUI extends Container {
 
 	/**
 	 * Full per-row viewport rewrite on the alt buffer. Emits only sync-output
-	 * brackets, a cursor home, and per-row rewrites — never ED3, append-tail, or
-	 * any native-scrollback byte, so it is fully isolated from the planner and
-	 * #commit. The hardware cursor stays hidden (it is never re-shown here).
+	 * brackets, a cursor home, and per-row rewrites - never ED3, append-tail, or
+	 * any native-scrollback byte, so it is fully isolated from the normal
+	 * renderer's commit ledger.
 	 */
-	#emitAltFrame(lines: string[], width: number, height: number): void {
+	#emitAltFrame(
+		lines: string[],
+		width: number,
+		height: number,
+		cursorPos?: { row: number; col: number } | null,
+	): void {
 		const fitted: string[] = new Array(height);
 		for (let r = 0; r < height; r++) fitted[r] = lines[r] ?? "";
-		// Flush queued image-data transmits (`a=t`, no visible output) before the
-		// paint so id-keyed placements and placeholder cells composed into this
-		// frame resolve against loaded data. The normal-screen path flushes these
-		// ahead of its paint; without this, an image first shown inside a
-		// fullscreen overlay (e.g. the settings shape preview) would render as
-		// blank placeholder cells until the overlay closed.
-		const imageTransmits = this.#imageBudget.takeTransmits();
-		if (imageTransmits.length > 0) {
-			let transmitBuffer = "";
-			for (const seq of imageTransmits) transmitBuffer += seq;
-			this.terminal.write(transmitBuffer);
+		// Native fullscreen overlays may contain image previews. Persistent fixed
+		// layout forces transcript images to text and must not transmit graphics.
+		if (cursorPos === undefined) {
+			const imageTransmits = this.#imageBudget.takeTransmits();
+			if (imageTransmits.length > 0) {
+				let transmitBuffer = "";
+				for (const seq of imageTransmits) transmitBuffer += seq;
+				this.terminal.write(transmitBuffer);
+			}
 		}
 		// Skip an identical repaint (the modal is mostly static between
 		// keystrokes) — unless a forced repaint (resetDisplay,
@@ -4044,24 +4511,41 @@ export class TUI extends Container {
 		// corrupted modal even when our cached frame is byte-identical.
 		const force = this.#forceViewportRepaintOnNextRender;
 		this.#forceViewportRepaintOnNextRender = false;
-		if (!force && this.#altPreviousLines.length === height) {
-			let same = true;
-			for (let r = 0; r < height; r++) {
-				if (fitted[r] !== this.#altPreviousLines[r]) {
-					same = false;
+		const cursorTarget = cursorPos === undefined ? null : this.#targetHardwareCursorState(cursorPos, height);
+		let sameFrame = !force && this.#altPreviousLines.length === height;
+		if (sameFrame) {
+			for (let row = 0; row < height; row++) {
+				if (fitted[row] !== this.#altPreviousLines[row]) {
+					sameFrame = false;
 					break;
 				}
 			}
-			if (same) return;
 		}
+		const sameCursor =
+			cursorPos === undefined
+				? true
+				: cursorTarget
+					? this.#sameHardwareCursorState(cursorTarget)
+					: this.#isHiddenCursorKnown();
+		if (sameFrame && sameCursor) return;
+
 		let buffer = `${this.#paintBeginSequence}\x1b[H`;
-		for (let r = 0; r < height; r++) {
-			if (r > 0) buffer += "\r\n";
-			buffer += this.#lineRewriteSequence(fitted[r], width, r, -1, -1);
+		for (let row = 0; row < height; row++) {
+			if (row > 0) buffer += "\r\n";
+			buffer += this.#lineRewriteSequence(fitted[row], width, row, -1, -1, true);
 		}
-		buffer += this.#paintEndSequence;
-		this.terminal.write(buffer);
-		this.#altPreviousLines = fitted;
+		if (cursorPos === undefined) {
+			buffer += this.#paintEndSequence;
+			this.terminal.write(buffer);
+			this.#altPreviousLines = fitted;
+		} else {
+			const cursorControl = this.#cursorControlSequence(cursorPos, height, Math.max(0, height - 1));
+			buffer += cursorControl.seq;
+			buffer += this.#paintEndSequence;
+			this.terminal.write(buffer);
+			this.#altPreviousLines = fitted;
+			this.#recordHardwareCursorUpdate(cursorControl);
+		}
 		this.#fullRedrawCount += 1;
 	}
 

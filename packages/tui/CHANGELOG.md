@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a persistent alternate-screen layout API with an independently scrollable transcript viewport, a bottom-pinned dock, Page Up/Page Down/top/follow navigation, and cursor mapping for focused dock components.
+- Added a persistent three-region pane compositor with independent conversation/sidebar viewports, fixed prompt geometry, keyboard focus routing, narrow-terminal sidebar overlays, and configurable pane styling.
+- Added pane-scoped mouse drag selection with button-motion tracking, owner-region clipping, wide-grapheme-safe highlighting, release-time selection clearing and copy callbacks, and transient centered status on the last Sidebar content row.
+
+### Fixed
+
+- Fixed pane frames reusing stale parent-container rows when a nested transcript mutates its published render array under the `RenderStablePrefix` contract; streamed output now repaints without waiting for keyboard input.
+- Limited pane `Tab` routing to empty Input → Conversation and either browse pane → Input; Conversation and Sidebar remain connected through left/right navigation.
+- Changed panes geometry so Input spans the full bottom width below Conversation and Sidebar, and routed pane-mode mouse-wheel input to Conversation without moving focus or enabling pointer-motion tracking.
+- Replaced panes-mode full focus frames with Pi focus indicators, a bottom-only rounded Conversation divider, a rounded Sidebar frame, and the Input component's native full-width chrome.
+- Fixed raw tabs in pane content expanding again at terminal tab stops and displacing or overwriting the adjoining Sidebar boundary.
+- Routed Page Up/Page Down and OpenCode message navigation (`Ctrl+Alt+Y/E`, `Ctrl+Alt+U/D`, `Ctrl+Alt+B/F`, `Ctrl+G`, and `Ctrl+Alt+G`) from a focused pane Input to the Conversation viewport without changing focus.
+- Fixed pane scrolling leaving old tool-output glyphs and frames at fixed screen coordinates by resetting SGR state and clearing each alternate-screen row before drawing its replacement.
+
 ## [17.2.13] - 2026-08-11
 
 ### Fixed

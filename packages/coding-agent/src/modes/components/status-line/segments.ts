@@ -84,12 +84,12 @@ function classifyProjectDir(pwd: string): { scratch: boolean; relative: string |
 const piSegment: StatusLineSegment = {
 	id: "pi",
 	render(ctx) {
-		if (ctx.focusedAgentId) {
+		if (ctx.focusedAgentId && ctx.inputFocused === undefined) {
 			const icon = theme.icon.ghost ? `${theme.icon.ghost} ` : "";
 			return { content: theme.fg("warning", `${icon}${ctx.focusedAgentId} `), visible: true };
 		}
 		const content = theme.icon.pi ? `${theme.icon.pi} ` : "";
-		return { content: theme.fg("accent", content), visible: true };
+		return { content: theme.fg(ctx.inputFocused === false ? "dim" : "accent", content), visible: true };
 	},
 };
 

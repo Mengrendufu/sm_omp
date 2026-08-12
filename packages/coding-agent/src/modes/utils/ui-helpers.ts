@@ -724,6 +724,7 @@ export class UiHelpers {
 			this.ctx.showStatus(`Session compacted ${times}`);
 		}
 		if (options.clearTerminalHistory) {
+			this.ctx.ui.resetFullscreenViewport();
 			this.ctx.ui.requestRender(true, { clearScrollback: true });
 		}
 		if (preservedChatChildren && preservedChatChildren.length > 0) {

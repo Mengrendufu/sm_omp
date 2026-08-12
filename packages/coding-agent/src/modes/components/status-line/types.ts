@@ -52,6 +52,8 @@ export interface SegmentContext {
 	session: AgentSession;
 	/** Focused subagent id while the view is proxied at its session, undefined otherwise. */
 	focusedAgentId?: string | undefined;
+	/** Whether the prompt input owns pane focus; omitted outside panes mode. */
+	inputFocused?: boolean;
 	/** Effective `statusLine.sessionAccent`; `false` disables hash-derived accent colors, while `true` or omission enables them. */
 	sessionAccent?: boolean;
 	activeRepo: ActiveRepoContext | null;

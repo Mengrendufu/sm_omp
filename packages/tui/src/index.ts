@@ -23,6 +23,8 @@ export * from "./deccara";
 export * from "./desktop-notify";
 // Editor component interface (for custom editors)
 export type * from "./editor-component";
+// Persistent alternate-screen transcript viewport
+export * from "./fullscreen";
 // Fuzzy matching
 export * from "./fuzzy";
 // Keybindings
@@ -36,6 +38,8 @@ export * from "./latex-block";
 export * from "./latex-to-unicode";
 // SGR mouse report parsing
 export * from "./mouse";
+// Persistent alternate-screen multi-pane layout
+export * from "./panes";
 // Mermaid diagram support
 // Input buffering for batch splitting
 export * from "./stdin-buffer";

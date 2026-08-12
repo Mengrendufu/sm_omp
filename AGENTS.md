@@ -6,6 +6,15 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 
 **Terminology**: When the user says "agent" or asks "why is agent doing X", they mean the **coding-agent package implementation**, not you (the assistant). The coding-agent is a CLI tool — questions about its behavior refer to code in `packages/coding-agent/`, not your current session.
 
+## Architecture Governance
+
+- The authoritative UML architecture model for this fork is `/mnt/c/mengrendufu/workshop/umls/staruml/omp_custom_tui/omp_custom_tui.mdj`.
+- Current customization scope is limited to the TUI and its necessary application-layer integration. Do not change agent, provider, tool, session, or other non-TUI runtime semantics.
+- Before implementing an architectural change, map the requirement to the UML model and establish the capability owner, crossed boundaries, dependency direction, contracts, state/resource ownership, and runtime assembly point.
+- Implementation may begin only when the UML model completely carries the required capabilities and no ownership, dependency, contract, or assembly decision remains unresolved.
+- If the UML model, repository rules, and implementation disagree, stop and report the inconsistency instead of inventing architecture facts.
+- After implementation, verify that code and UML still correspond; update the model when the settled architecture changes.
+
 ### Package Structure
 
 | Package                 | Description                                                                             |

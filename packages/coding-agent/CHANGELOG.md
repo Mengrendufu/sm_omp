@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added optional `tui.layout: panes` mode with independently scrollable Conversation and Todo/Subagent regions, a fixed prompt region, pane focus navigation, and configurable sidebar width, input height, and compact-mode threshold.
+- Added mouse drag-to-copy in `tui.layout: panes`; selection is confined to the Conversation, Input, or Sidebar region where the drag begins, copies immediately on release, clears its highlight, and briefly shows `Copied` on the Sidebar bottom border.
+
+### Fixed
+
+- Moved panes-mode Working, retry, and compaction loaders into Conversation, and prevented `Tab` from leaving a prompt that still contains text or images.
+- Kept panes-mode content at normal intensity, removed the extra frame around the native rounded prompt, and identified focus only through accent/dim Pi symbols on Input, Conversation, and Sidebar chrome.
+
 ## [17.2.15] - 2026-08-12
 
 ### Added
@@ -11,6 +21,7 @@
 - Expanded tool discovery in `omp cleanse` to support `staticcheck` and `golangci-lint` (Go); `mypy`, `pylint`, `flake8`, `ty`, and `basedpyright` (Python); `oxlint`, `deno lint`, `stylelint`, and `vue-tsc` (JS/TS); and `actionlint` (GitHub Workflows).
 - Added support for natural language requests in `omp cleanse "<request>"`, which launches a discovery subagent to automatically inspect the project, determine the correct commands, and map outputs.
 - Added an interactive picker to `omp cleanse` when run without arguments on a TTY, allowing users to run all checkers, select a specific checker, or describe what to fix.
+- Added `tui.layout` (`fixed` by default, `native` for compatibility) so the prompt remains pinned while the conversation scrolls independently.
 
 ### Changed
 

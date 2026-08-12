@@ -600,6 +600,35 @@ describe("TUI inline-image budget", () => {
 		);
 	}
 
+	it("uses text fallbacks without transmitting image data in fixed layout", async () => {
+		const term = new VirtualTerminal(40, 8);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+		const tui = new TUI(term);
+		const image = makeImage(tui.imageBudget, "fixed");
+		const dock = new Text("prompt", 0, 0);
+		tui.addChild(image);
+		tui.addChild(dock);
+		tui.enterFullscreen({ scroll: [image], dock });
+
+		try {
+			tui.start();
+			await settle(term);
+
+			const output = writes.join("");
+			expect(output).not.toContain("\x1b_Ga=t");
+			expect(output).not.toContain(BASE64_ONE_PIXEL_PNG);
+			expect(term.getViewport().some(line => line.includes("[Image:"))).toBe(true);
+			expect([...tui.imageBudget.takeTransmits()]).toEqual([]);
+		} finally {
+			tui.stop();
+		}
+	});
+
 	it("renders following text below a multi-row direct Kitty placement", async () => {
 		const originalGraphics = { ...getKittyGraphics() };
 		const term = new VirtualTerminal(40, 12);

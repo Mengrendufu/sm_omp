@@ -224,6 +224,7 @@ import type {
 import { UiHelpers } from "./utils/ui-helpers";
 
 const STILL_CLOSING_DELAY_MS = 3_000;
+const COPY_FEEDBACK_DURATION_MS = 1_500;
 
 const HINT_SHIMMER_PALETTE: ShimmerPalette = {
 	low: "dim",
@@ -525,6 +526,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
 	#todoAutoClearTimer: NodeJS.Timeout | undefined;
 	#modelCycleClearTimer: NodeJS.Timeout | undefined;
+	#copyFeedbackTimer: NodeJS.Timeout | undefined;
 	#nextAppearanceRequestToken = 1;
 	#appearanceRefreshRequest: { token: TerminalAppearanceRequestToken; deadline: number } | undefined;
 	todoPhases: TodoPhase[] = [];
@@ -991,10 +993,12 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		const startupQuiet = settings.get("startup.quiet");
 		this.#welcomeComponent = undefined;
+		const layout = this.settings.get("tui.layout");
+		const conversationPane = layout === "panes" ? new Container() : this.ui;
 
 		for (const warning of this.session.configWarnings) {
-			this.ui.addChild(new Text(theme.fg("warning", `Warning: ${warning}`), 1, 0));
-			this.ui.addChild(new Spacer(1));
+			conversationPane.addChild(new Text(theme.fg("warning", `Warning: ${warning}`), 1, 0));
+			conversationPane.addChild(new Spacer(1));
 		}
 
 		if (!startupQuiet) {
@@ -1008,49 +1012,104 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 
 			// Setup UI layout
-			this.ui.addChild(new Spacer(1));
-			this.ui.addChild(this.#welcomeComponent);
-			this.ui.addChild(new Spacer(1));
+			conversationPane.addChild(new Spacer(1));
+			conversationPane.addChild(this.#welcomeComponent);
+			conversationPane.addChild(new Spacer(1));
 			if (!options.suppressWelcomeIntro) {
 				this.playWelcomeIntro();
 			}
 
 			// Add changelog if provided
 			if (this.#startupChangelog && settings.get("startup.changelogMode") !== "hidden") {
-				this.ui.addChild(new DynamicBorder());
-				this.ui.addChild(new Text(theme.bold(theme.fg("accent", "What's New")), 1, 0));
-				this.ui.addChild(new Spacer(1));
+				conversationPane.addChild(new DynamicBorder());
+				conversationPane.addChild(new Text(theme.bold(theme.fg("accent", "What's New")), 1, 0));
+				conversationPane.addChild(new Spacer(1));
 				if (settings.get("startup.changelogMode") === "summary") {
 					const summary = formatStartupChangelogSummary(this.#startupChangelog).replace(
 						/\/changelog(?: full)?/g,
 						command => theme.bold(command),
 					);
-					this.ui.addChild(new Text(summary, 1, 0));
+					conversationPane.addChild(new Text(summary, 1, 0));
 				} else {
-					this.ui.addChild(new Markdown(this.#startupChangelog.markdown?.trim() ?? "", 1, 0, getMarkdownTheme()));
+					conversationPane.addChild(
+						new Markdown(this.#startupChangelog.markdown?.trim() ?? "", 1, 0, getMarkdownTheme()),
+					);
 				}
-				this.ui.addChild(new Spacer(1));
-				this.ui.addChild(new DynamicBorder());
+				conversationPane.addChild(new Spacer(1));
+				conversationPane.addChild(new DynamicBorder());
 			}
 		}
 
-		this.ui.addChild(this.chatContainer);
-		this.ui.addChild(this.pendingMessagesContainer);
-		this.ui.addChild(this.todoContainer);
-		this.ui.addChild(this.subagentContainer);
-		this.ui.addChild(this.btwContainer);
-		this.ui.addChild(this.omfgContainer);
-		this.ui.addChild(this.errorBannerContainer);
-		this.ui.addChild(this.modelCycleContainer);
-		this.ui.addChild(this.deferredCommandContainer);
-		// Working loader / transient status sits below the sticky todo + subagent
-		// HUDs, just above the editor's hook-widget top margin — so it reads next to
-		// the prompt while keeping the one-line gap above the editor.
-		this.ui.addChild(this.statusContainer);
-		this.ui.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
-		this.ui.addChild(this.hookWidgetContainerAbove);
-		this.ui.addChild(this.editorContainer);
-		this.ui.addChild(this.hookWidgetContainerBelow);
+		conversationPane.addChild(this.chatContainer);
+		conversationPane.addChild(this.pendingMessagesContainer);
+		if (layout !== "panes") {
+			conversationPane.addChild(this.todoContainer);
+			conversationPane.addChild(this.subagentContainer);
+		}
+		conversationPane.addChild(this.btwContainer);
+		conversationPane.addChild(this.omfgContainer);
+		conversationPane.addChild(this.errorBannerContainer);
+		conversationPane.addChild(this.modelCycleContainer);
+		conversationPane.addChild(this.deferredCommandContainer);
+
+		// Working and other transient run status belong to the output group in
+		// panes mode; Todo and Subagents occupy the independently scrollable sidebar.
+		if (layout === "panes") {
+			conversationPane.addChild(this.statusContainer);
+			const inputPane = new Container();
+			inputPane.addChild(this.statusLine);
+			inputPane.addChild(this.hookWidgetContainerAbove);
+			inputPane.addChild(this.editorContainer);
+			inputPane.addChild(this.hookWidgetContainerBelow);
+			const sidebarPane = new Container();
+			sidebarPane.addChild(this.todoContainer);
+			sidebarPane.addChild(this.subagentContainer);
+			this.ui.addChild(conversationPane);
+			this.ui.addChild(inputPane);
+			this.ui.addChild(sidebarPane);
+			this.ui.enterPanes({
+				conversation: conversationPane,
+				input: inputPane,
+				inputFocus: this.editor,
+				canLeaveInput: () => this.editor.getText().length === 0 && this.editor.pendingImages.length === 0,
+				sidebar: sidebarPane,
+				sidebarWidth: this.settings.get("tui.panes.sidebarWidth"),
+				minLeftWidth: 48,
+				narrowWidth: this.settings.get("tui.panes.narrowWidth"),
+				inputMaxHeight: this.settings.get("tui.panes.inputMaxHeight"),
+				focusIndicator: theme.icon.pi,
+				borderStyle: text => theme.fg("borderMuted", text),
+				focusIndicatorStyle: (text, _pane, focused) => theme.fg(focused ? "accent" : "dim", text),
+				contentStyle: text => text,
+				selectionStyle: text => theme.bg("selectedBg", text),
+				onCopySelection: text => {
+					void copyToClipboard(text);
+					this.#showCopyFeedback();
+				},
+				onFocusChange: focus => this.statusLine.setInputFocused(focus === "input"),
+			});
+		} else {
+			if (layout === "fixed") {
+				const dock = new Container();
+				dock.addChild(this.statusContainer);
+				dock.addChild(this.statusLine);
+				dock.addChild(this.hookWidgetContainerAbove);
+				dock.addChild(this.editorContainer);
+				dock.addChild(this.hookWidgetContainerBelow);
+				this.ui.addChild(dock);
+				this.ui.enterFullscreen({
+					scroll: this.ui.children.slice(0, -1),
+					dock,
+					viewportControls: true,
+				});
+			} else {
+				this.ui.addChild(this.statusContainer);
+				this.ui.addChild(this.statusLine); // Only renders hook statuses (main status in editor border)
+				this.ui.addChild(this.hookWidgetContainerAbove);
+				this.ui.addChild(this.editorContainer);
+				this.ui.addChild(this.hookWidgetContainerBelow);
+			}
+		}
 		this.ui.setFocus(this.editor);
 
 		this.#inputController.setupKeyHandlers();
@@ -1248,6 +1307,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.statusLine.watchBranch(() => {
 			this.ui.requestRender();
 		});
+	}
+	#showCopyFeedback(): void {
+		if (this.#copyFeedbackTimer) clearTimeout(this.#copyFeedbackTimer);
+		this.ui.setPanesSidebarStatus(theme.fg("success", "Copied"));
+		this.#copyFeedbackTimer = setTimeout(() => {
+			this.#copyFeedbackTimer = undefined;
+			this.ui.setPanesSidebarStatus(undefined);
+		}, COPY_FEEDBACK_DURATION_MS);
+		this.#copyFeedbackTimer.unref?.();
 	}
 
 	/** Reload the title-generation system prompt override for the provided working
@@ -1763,7 +1831,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#computeEditorMaxHeight(): number {
-		return computeEditorMaxHeight(this.ui.terminal.rows);
+		const maxHeight = computeEditorMaxHeight(this.ui.terminal.rows);
+		if (this.settings.get("tui.layout") !== "panes") return maxHeight;
+		return Math.max(EDITOR_MIN_RENDERED_ROWS, Math.min(maxHeight, this.settings.get("tui.panes.inputMaxHeight") - 3));
 	}
 
 	#syncEditorMaxHeight(): void {
@@ -4095,6 +4165,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#cleanupMicAnimation();
 		this.#liveCommandController.dispose();
 		this.#cancelTodoAutoClearTimer();
+		if (this.#copyFeedbackTimer) {
+			clearTimeout(this.#copyFeedbackTimer);
+			this.#copyFeedbackTimer = undefined;
+		}
 		this.#cancelObserverUiSyncTimer();
 		this.#cancelGoalContinuation();
 		if (this.#sttController) {
@@ -4237,6 +4311,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editorContainer.clear();
 		this.editor = nextEditor;
 		this.editorContainer.addChild(nextEditor);
+		this.ui.setPanesInputFocus(nextEditor);
 		this.ui.setFocus(nextEditor);
 
 		this.#inputController.setupKeyHandlers();

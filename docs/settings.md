@@ -660,6 +660,11 @@ images:
   blockImages: false
 tui:
   hyperlinks: auto # off, auto, always
+  layout: fixed # panes, fixed, native
+  panes:
+    sidebarWidth: 36
+    inputMaxHeight: 12
+    narrowWidth: 100
 ```
 
 | Key                         | Type    | Default          | Values                                                                    |
@@ -677,7 +682,15 @@ tui:
 | `terminal.showImages`       | boolean | `true`           | Render images inline (when the terminal supports it).                     |
 | `images.autoResize`         | boolean | `true`           | Resize large images for model compatibility.                              |
 | `images.blockImages`        | boolean | `false`          | Never send images to providers.                                           |
+| `tui.layout`                | enum    | `fixed`          | `panes`, `fixed`, `native`. Restart required after changing.              |
+| `tui.panes.sidebarWidth`    | number  | `36`             | Sidebar width in terminal columns.                                        |
+| `tui.panes.inputMaxHeight`  | number  | `12`             | Maximum prompt-region height in terminal rows.                            |
+| `tui.panes.narrowWidth`     | number  | `100`            | Auto-hide the sidebar below this terminal width.                          |
 | `tui.hyperlinks`            | enum    | `auto`           | `off`, `auto`, `always`.                                                  |
+
+`tui.layout: panes` arranges Conversation and Sidebar side by side above a full-width fixed Input region. Conversation and Sidebar keep independent viewport state. Conversation content keeps its normal colors and uses only a rounded bottom divider; Sidebar keeps a complete rounded frame; Input renders its existing `CustomEditor` rounded frame without a second pane wrapper. Each region reuses the configured Pi symbol, with only the focused region's Pi in the accent color and the other two dimmed. `Tab` leaves Input only when the prompt contains neither text nor images; from Input it selects Conversation, while from either browse pane it returns to Input. `h`/`l` or Left/Right switch only between Conversation and Sidebar. `j`/`k`, `u`/`d`, Page Up/Page Down, and `g`/`G` scroll the focused browse pane. While Input is focused, Conversation accepts the OpenCode message shortcuts: `Ctrl+Alt+Y`/`Ctrl+Alt+E` scroll one line, `Ctrl+Alt+U`/`Ctrl+Alt+D` scroll half a page, `Ctrl+Alt+B`/`Ctrl+Alt+F` scroll a full page, and `Ctrl+G`/`Ctrl+Alt+G` jump to the first/last output; focus remains in Input. Page Up/Page Down and the mouse wheel also scroll Conversation without moving focus. A left-button drag selects visible terminal cells only inside the region where the drag began; crossing into another region clamps the selection to its owner's boundary. Releasing the button copies the selected text immediately, clears the highlight, and briefly shows `Copied` centered on the last Sidebar content row above its bottom border. `Ctrl+Shift+B` toggles the sidebar. Below `tui.panes.narrowWidth`, the sidebar auto-hides and the same shortcut opens it over the right side of Conversation without covering Input; `Esc` closes the overlay and restores the previous focus. Working and retry/compaction status render in Conversation rather than the fixed prompt.
+
+`tui.layout: fixed` keeps the prompt dock pinned to the bottom of the alternate screen while Page Up/Page Down scroll the conversation independently. Set `tui.layout: native` to retain terminal-owned scrollback and native terminal selection; pane-scoped drag selection applies only to `panes`.
 
 For a custom status line, set `statusLine.preset: custom` and configure `statusLine.leftSegments`, `statusLine.rightSegments`, and `statusLine.segmentOptions`.
 

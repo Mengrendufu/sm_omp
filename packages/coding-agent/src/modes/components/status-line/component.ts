@@ -359,6 +359,7 @@ export class StatusLineComponent implements Component {
 	#vibeWorkerTokenRate: (() => number | null) | null = null;
 	#collabStatus: CollabStatus | null = null;
 	#focusedAgentId: string | undefined;
+	#inputFocused: boolean | undefined;
 	#activeRepoCache: ActiveRepoCache | undefined;
 
 	// Git status caching (1s TTL)
@@ -467,6 +468,12 @@ export class StatusLineComponent implements Component {
 			this.#invalidateSessionCaches();
 			this.#closeStaleActiveWindow();
 		}
+		this.invalidate();
+	}
+
+	setInputFocused(focused: boolean): void {
+		if (this.#inputFocused === focused) return;
+		this.#inputFocused = focused;
 		this.invalidate();
 	}
 
@@ -1608,6 +1615,7 @@ export class StatusLineComponent implements Component {
 		return {
 			session: this.session,
 			focusedAgentId: this.#focusedAgentId,
+			inputFocused: this.#inputFocused,
 			sessionAccent: this.#resolveSettings().sessionAccent !== false,
 			activeRepo: activeRepoCache.activeRepo,
 			width,

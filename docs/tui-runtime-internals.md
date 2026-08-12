@@ -46,7 +46,59 @@ Boundary rule: the TUI engine is message-agnostic. It only knows `Component.rend
 - `editorContainer` (holds `CustomEditor`)
 - `hookWidgetContainerBelow`
 
-`init()` wires the tree in that order after any startup warnings/welcome/changelog, focuses the editor, registers input handlers via `InputController`, starts TUI, pushes terminal title state, updates the editor border, and requests a forced render.
+`init()` focuses the editor, registers input handlers via `InputController`,
+starts TUI, pushes terminal title state, updates the editor border, and requests
+a forced render. Root assembly depends on `tui.layout`.
+
+With `tui.layout: panes`, `InteractiveMode` assembles exactly three roots:
+Conversation (chat, pending messages, transient conversation panels, and
+`statusContainer` loaders), Input (`statusLine`, hook widgets, and the existing
+`CustomEditor`), and Sidebar (Todo and Subagent HUDs). `TUI.enterPanes()` owns
+region geometry: Conversation and Sidebar share the upper row, while Input spans
+the full terminal width below them. It also owns independent Conversation/Sidebar
+viewport offsets, pane focus, compact Sidebar overlay, alternate-screen painting,
+SGR button-drag selection, and wheel routing. Wheel events always scroll
+Conversation without moving focus. A left press locks selection ownership to
+the topmost pane rectangle under the pointer (Sidebar wins in compact overlay
+mode); drag and release coordinates clamp to that same rectangle. Conversation
+content retains normal intensity and has only a rounded bottom divider; Sidebar
+has a complete rounded frame; Input keeps the existing
+`CustomEditor` frame without a pane-level wrapper. All three regions reuse the
+configured Pi symbol, and pane focus changes only that symbol between accent
+and dim colors. `Tab` leaves Input only for an empty text/image draft and
+returns from either browse pane to Input; `h`/`l` switches only between
+Conversation and Sidebar. While Input is focused, Page Up/Page Down and the
+OpenCode message bindings (`Ctrl+Alt+Y/E`, `Ctrl+Alt+U/D`, `Ctrl+Alt+B/F`,
+`Ctrl+G`, and `Ctrl+Alt+G`) route line, half-page, page, first, and last
+operations to Conversation without changing focus. The editor remains the
+input component; switching pane focus never copies or replaces its draft/history state.
+Each alternate-screen repaint resets SGR state and erases every physical row
+before drawing its replacement, so viewport scrolling cannot leave old glyphs
+or pane backgrounds behind until later content overwrites those cells.
+
+`PanesViewport` extracts the selected terminal-cell range from the latest
+composed frame, expands partial wide-character hits to grapheme boundaries,
+and paints it with the configured selection style. On release, `TUI` invokes
+the injected copy callback and clears the selection in the same input event;
+`InteractiveMode` sends the plain text to the system clipboard through OSC 52
+plus the native best-effort backend, then places a transient, horizontally
+centered `Copied` status on the last Sidebar content row above its bottom border.
+Panes use SGR 1002 button-motion tracking, while
+fullscreen overlays keep their existing 1003 any-motion behavior and
+fixed/native layouts retain terminal selection. A click without a drag copies
+nothing and leaves no one-cell selection. Before fixed-width Pane rows are
+spliced together, raw tabs are expanded to spaces so terminal tab stops cannot
+move the adjoining Sidebar boundary.
+
+With `tui.layout: fixed` (the default), `InteractiveMode` groups
+`statusContainer`, `statusLine`, both hook-widget containers, and
+`editorContainer` into a dock, then passes the preceding roots as the
+scrollable transcript to `TUI.enterFullscreen()`. The persistent alternate
+screen gives the conversation application-owned Page Up/Page Down/top/follow
+navigation while the dock remains fixed. `tui.layout: native` skips either
+alternate-screen layout and retains the normal-screen component tree and
+terminal scrollback.
+
 A forced render (`requestRender(true)`) queues a viewport repaint or explicit session replacement; it does **not** throw away previous-line history by default.
 
 ## Terminal lifecycle and stdin normalization
@@ -138,6 +190,14 @@ By default, native scrollback is append-only: committed frame rows are never rew
 
 The opt-in `tui.scrollbackRebuild` setting (default `false`) changes how a committed-prefix divergence is repaired. When finalized content replaces a scrolled-off preview, or a frame collapses into already committed rows, a direct terminal session clears native scrollback with ED3 and replays the current frame so the stale and final forms do not both remain. Multiplexer sessions never take this destructive path and retain the append/repair-below fallback. `PI_TUI_SCROLLBACK_REBUILD=1` initializes the low-level `TUI` flag, but `InteractiveMode` then applies the configured `tui.scrollbackRebuild` value; the setting is therefore the effective control in coding-agent.
 
+In persistent fixed layout, the native-scrollback ledger is bypassed.
+`FullscreenViewport` slices the transcript at its application-owned
+`scrollTop`, clips the dock while reserving at least three transcript rows,
+and emits one terminal-height alternate-screen frame. Cursor markers are
+mapped after composition, so the hardware cursor remains on the editor while
+the conversation moves. Temporary fullscreen overlays reuse the alternate
+screen without ending the persistent layout.
+
 Render writes use synchronized output mode (`CSI ? 2026 h/l`) when enabled; capability detection, DECRQM, or `PI_NO_SYNC_OUTPUT` can disable the wrappers while leaving autowrap discipline on.
 
 ## Render safety constraints
@@ -184,7 +244,7 @@ Read-tool grouping is intentionally stateful (`#lastReadGroup`) to coalesce cons
 
 Status lane ownership:
 
-- `statusContainer` holds transient loaders (`loadingAnimation`, `autoCompactionLoader`, `retryLoader`).
+- `statusContainer` holds transient loaders (`loadingAnimation`, `autoCompactionLoader`, `retryLoader`); panes mode mounts it in Conversation, while fixed/native layouts retain their existing status placement.
 - `statusLine` renders persistent status/hooks/plan indicators and drives editor top border updates.
 
 Loader behavior:

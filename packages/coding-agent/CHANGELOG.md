@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.2.15-sm.1] - 2026-08-13
+
 ### Added
 
 - Added optional `tui.layout: panes` mode with independently scrollable Conversation and Todo/Subagent regions, a fixed prompt region, pane focus navigation, and configurable sidebar width, input height, and compact-mode threshold.

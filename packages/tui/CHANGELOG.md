@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [17.2.15-sm.1] - 2026-08-13
+
 ### Added
 
 - Added a persistent alternate-screen layout API with an independently scrollable transcript viewport, a bottom-pinned dock, Page Up/Page Down/top/follow navigation, and cursor mapping for focused dock components.

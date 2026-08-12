@@ -128,6 +128,22 @@ function fitRow(line: string, width: number): string {
 	return line.includes("\x1b") ? `\x1b[0m${row}\x1b[0m` : row;
 }
 
+const SGR_SEQUENCE = /\x1b\[[0-?]*[ -/]*m/g;
+// Apply the overlay after each embedded SGR so source resets and background
+// colors cannot cancel the selection before its visible text is painted.
+
+function styleTextRuns(text: string, style: (text: string) => string): string {
+	let result = "";
+	let start = 0;
+	for (const match of text.matchAll(SGR_SEQUENCE)) {
+		const index = match.index;
+		if (index > start) result += style(text.slice(start, index));
+		result += match[0];
+		start = index + match[0].length;
+	}
+	return start < text.length ? result + style(text.slice(start)) : result;
+}
+
 export class PanesViewport {
 	readonly #options: PanesViewportOptions;
 	readonly #conversation = new RowViewport();
@@ -295,7 +311,7 @@ export class PanesViewport {
 			const before = sliceByColumn(line, 0, range.start, true);
 			const selected = sliceByColumn(line, range.start, range.end - range.start, true);
 			const after = sliceByColumn(line, range.end, Math.max(0, totalWidth - range.end), true);
-			return before + style(selected) + after;
+			return before + styleTextRuns(selected, style) + after;
 		});
 	}
 

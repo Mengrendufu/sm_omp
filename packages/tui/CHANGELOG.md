@@ -17,6 +17,7 @@
 - Fixed raw tabs in pane content expanding again at terminal tab stops and displacing or overwriting the adjoining Sidebar boundary.
 - Routed Page Up/Page Down and OpenCode message navigation (`Ctrl+Alt+Y/E`, `Ctrl+Alt+U/D`, `Ctrl+Alt+B/F`, `Ctrl+G`, and `Ctrl+Alt+G`) from a focused pane Input to the Conversation viewport without changing focus.
 - Fixed pane scrolling leaving old tool-output glyphs and frames at fixed screen coordinates by resetting SGR state and clearing each alternate-screen row before drawing its replacement.
+- Fixed pane drag-selection highlights disappearing on ANSI-styled transcript and sidebar text when embedded SGR resets canceled the selection background before painting its glyphs.
 
 ## [17.2.13] - 2026-08-11
 

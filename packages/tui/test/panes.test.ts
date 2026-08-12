@@ -596,4 +596,47 @@ describe("TUI panes layout", () => {
 			tui.stop();
 		}
 	});
+
+	it("paints and clears a live drag selection over ANSI-styled pane text", async () => {
+		const terminal = new VirtualTerminal(40, 8);
+		const tui = new TUI(terminal);
+		const conversation = new PaneTestComponent(["chat-0", "\x1b[38;2;200;100;50mchat-1\x1b[39m", "chat-2", "chat-3"]);
+		const input = new PaneTestComponent(["prompt"]);
+		const inputRoot = new Container();
+		inputRoot.addChild(input);
+		const sidebar = new PaneTestComponent(["side-0"]);
+		const copied: string[] = [];
+		tui.addChild(conversation);
+		tui.addChild(inputRoot);
+		tui.addChild(sidebar);
+		tui.enterPanes({
+			conversation,
+			input: inputRoot,
+			inputFocus: input,
+			sidebar,
+			sidebarWidth: 12,
+			minLeftWidth: 12,
+			narrowWidth: 24,
+			selectionStyle: text => `\x1b[48;2;1;2;3m${text}\x1b[49m`,
+			onCopySelection: text => copied.push(text),
+		});
+		tui.setFocus(input);
+
+		try {
+			tui.start();
+			await terminal.waitForRender();
+
+			terminal.sendInput("\x1b[<0;1;2M");
+			terminal.sendInput("\x1b[<32;6;2M");
+			await terminal.waitForRender();
+			expect(terminal.getViewportRowBackgroundColumns(1)).toEqual([0, 1, 2, 3, 4, 5]);
+
+			terminal.sendInput("\x1b[<0;6;2m");
+			await terminal.waitForRender();
+			expect(copied).toEqual(["chat-1"]);
+			expect(terminal.getViewportRowBackgroundColumns(1)).toEqual([]);
+		} finally {
+			tui.stop();
+		}
+	});
 });

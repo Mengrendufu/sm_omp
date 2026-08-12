@@ -105,6 +105,8 @@ export class ImageBudget {
 	#transmitted = new Set<number>();
 	/** Transmit sequences (full base64) to write once, before this frame's placements. */
 	#pendingTransmits: string[] = [];
+	/** Virtual-placement commands emitted before a fixed-grid frame's placeholder cells. */
+	#pendingPlacements: string[] = [];
 	// True while the in-flight pass is a partial/throwaway pass (the
 	// non-multiplexer resize viewport fast path) that walks only the visible
 	// tail, bottom-up. Such a pass cannot derive display order from observe()
@@ -116,6 +118,8 @@ export class ImageBudget {
 	// full, correctly-ordered walk.
 	#suppressedIds = new Set<number>();
 	#graphicsSuppressionDepth = 0;
+	#viewportGraphicsDepth = 0;
+	#viewportMaxHeightCells: number | undefined;
 	/**
 	 * Per-image direct-placement emit state: source pixel geometry for the
 	 * renderer's clipped source rectangle, plus the placement-id epoch (see
@@ -169,6 +173,32 @@ export class ImageBudget {
 
 	get graphicsSuppressed(): boolean {
 		return this.#graphicsSuppressionDepth > 0;
+	}
+
+	/**
+	 * Restrict a persistent fixed-grid render to cell-addressable graphics and
+	 * cap each image to its owning viewport's visible content height.
+	 */
+	withViewportGraphics<T>(maxHeightCells: number, render: () => T): T {
+		const previousMaxHeight = this.#viewportMaxHeightCells;
+		const normalizedMaxHeight = Math.max(1, Math.trunc(maxHeightCells));
+		this.#viewportGraphicsDepth++;
+		this.#viewportMaxHeightCells =
+			previousMaxHeight === undefined ? normalizedMaxHeight : Math.min(previousMaxHeight, normalizedMaxHeight);
+		try {
+			return render();
+		} finally {
+			this.#viewportMaxHeightCells = previousMaxHeight;
+			this.#viewportGraphicsDepth--;
+		}
+	}
+
+	get viewportGraphicsOnly(): boolean {
+		return this.#viewportGraphicsDepth > 0;
+	}
+
+	get viewportMaxHeightCells(): number | undefined {
+		return this.#viewportMaxHeightCells;
 	}
 
 	/**
@@ -272,6 +302,7 @@ export class ImageBudget {
 		this.#transmitted.clear();
 		this.#purgeIds = [];
 		this.#pendingTransmits = [];
+		this.#pendingPlacements = [];
 		this.#keyToId.clear();
 		this.#idToKey.clear();
 		this.#placementState.clear();
@@ -404,6 +435,11 @@ export class ImageBudget {
 		this.#pendingTransmits.push(sequence);
 	}
 
+	/** Queue a virtual placement independently of placeholder row visibility. */
+	enqueuePlacement(sequence: string): void {
+		this.#pendingPlacements.push(sequence);
+	}
+
 	/** Whether a frame has image data queued but not yet written to the terminal. */
 	hasPendingTransmits(): boolean {
 		return this.#pendingTransmits.length > 0;
@@ -419,6 +455,7 @@ export class ImageBudget {
 		return (
 			this.#lastTotal === 0 &&
 			this.#pendingTransmits.length === 0 &&
+			this.#pendingPlacements.length === 0 &&
 			this.#purgeIds.length === 0 &&
 			this.#planned === this.#onTerminal
 		);
@@ -432,6 +469,14 @@ export class ImageBudget {
 		return sequences;
 	}
 
+	/** Virtual placements to write after transmits and before placeholder cells. */
+	takePlacements(): readonly string[] {
+		if (this.#pendingPlacements.length === 0) return EMPTY_TRANSMITS;
+		const sequences = this.#pendingPlacements;
+		this.#pendingPlacements = [];
+		return sequences;
+	}
+
 	/**
 	 * Drop transmit tracking so every still-live image re-enqueues its data
 	 * (`a=t`) on the next render. Recovers when the terminal dropped the original
@@ -441,9 +486,12 @@ export class ImageBudget {
 	 * re-emit together; keeps no base64 in budget state (the transmit-once design).
 	 */
 	forgetTransmitted(): void {
-		if (this.#transmitted.size === 0 && this.#pendingTransmits.length === 0) return;
+		if (this.#transmitted.size === 0 && this.#pendingTransmits.length === 0 && this.#pendingPlacements.length === 0) {
+			return;
+		}
 		this.#transmitted.clear();
 		this.#pendingTransmits = [];
+		this.#pendingPlacements = [];
 	}
 
 	#forgetKeyForId(id: number): void {
@@ -493,6 +541,8 @@ export class Image implements Component {
 	#cachedCellWidthPx = 0;
 	#cachedCellHeightPx = 0;
 	#cachedKittyUnicodePlaceholders = false;
+	#cachedViewportGraphics = false;
+	#cachedViewportMaxHeightCells: number | undefined;
 	// Tallest graphic placement this image has rendered. The text fallback
 	// pads itself to this height so a budget demotion never shrinks the block
 	// (its rows may already be committed to native scrollback).
@@ -524,6 +574,8 @@ export class Image implements Component {
 		const hasProtocol = imageProtocol != null;
 		const cellDimensions = getCellDimensions();
 		const kittyUnicodePlaceholders = getKittyGraphics().unicodePlaceholders;
+		const viewportGraphics = this.#budget?.viewportGraphicsOnly ?? false;
+		const viewportMaxHeightCells = this.#budget?.viewportMaxHeightCells;
 		// observe() must run on every pass — even a cache hit — so the image keeps
 		// its display-order slot in the budget. Only graphics-capable frames count
 		// toward (and are demoted by) the budget; without a protocol every image is
@@ -540,7 +592,9 @@ export class Image implements Component {
 			this.#cachedImageProtocol === imageProtocol &&
 			this.#cachedCellWidthPx === cellDimensions.widthPx &&
 			this.#cachedCellHeightPx === cellDimensions.heightPx &&
-			this.#cachedKittyUnicodePlaceholders === kittyUnicodePlaceholders
+			this.#cachedKittyUnicodePlaceholders === kittyUnicodePlaceholders &&
+			this.#cachedViewportGraphics === viewportGraphics &&
+			this.#cachedViewportMaxHeightCells === viewportMaxHeightCells
 		) {
 			return this.#cachedLines;
 		}
@@ -554,21 +608,39 @@ export class Image implements Component {
 			// Transmit the data once (keyed by id); thereafter renderImage returns
 			// just the placement, so repaints never re-send the base64.
 			const needsTransmit = this.#imageId != null && (this.#budget?.shouldTransmit(this.#imageId) ?? false);
-			const result = renderImage(this.#base64Data, this.#dimensions, {
+			const optionMaxHeight = this.#options.maxHeightCells;
+			const maxHeightCells =
+				viewportMaxHeightCells === undefined
+					? optionMaxHeight
+					: optionMaxHeight === undefined
+						? viewportMaxHeightCells
+						: Math.min(optionMaxHeight, viewportMaxHeightCells);
+			const rendered = renderImage(this.#base64Data, this.#dimensions, {
 				maxWidthCells: maxWidth,
-				maxHeightCells: this.#options.maxHeightCells,
+				maxHeightCells,
 				imageId: this.#imageId,
 				includeTransmit: needsTransmit,
 			});
+			// Persistent fixed grids accept only Kitty Unicode placeholders.
+			// Direct placements, iTerm2, SIXEL, and oversized placeholder grids
+			// do not expose cell-safe clipping/replacement semantics here.
+			const result = viewportGraphics && !rendered?.lines ? null : rendered;
 
 			if (result?.transmit && this.#imageId != null && this.#budget !== undefined) {
 				this.#budget.enqueueTransmit(this.#imageId, result.transmit);
 			}
 
 			if (result?.lines) {
-				// Unicode placeholders: the image is already a block of real text-cell
-				// lines (line 0 carries the virtual-placement APC). No cursor moves.
-				lines = result.lines;
+				// Fixed-grid placeholder placement is a frame prelude, not row
+				// content: vertical slicing may discard any particular image row.
+				if (viewportGraphics && result.sequence && this.#budget !== undefined) {
+					this.#budget.enqueuePlacement(result.sequence);
+					lines = result.lines.slice();
+					const first = lines[0];
+					if (first?.startsWith(result.sequence)) lines[0] = first.slice(result.sequence.length);
+				} else {
+					lines = result.lines;
+				}
 			} else if (result) {
 				// Direct placement: return `rows` lines so TUI accounts for image
 				// height. First (rows-1) lines are empty (TUI clears them); the last
@@ -607,6 +679,8 @@ export class Image implements Component {
 		this.#cachedCellWidthPx = cellDimensions.widthPx;
 		this.#cachedCellHeightPx = cellDimensions.heightPx;
 		this.#cachedKittyUnicodePlaceholders = kittyUnicodePlaceholders;
+		this.#cachedViewportGraphics = viewportGraphics;
+		this.#cachedViewportMaxHeightCells = viewportMaxHeightCells;
 
 		return lines;
 	}

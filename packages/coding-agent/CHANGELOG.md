@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [17.2.15-sm.2] - 2026-08-13
+
+### Fixed
+
+- Changed the pane Sidebar Subagents list to a two-line tree layout rendered against its actual width, preventing long agent IDs and descriptions from wrapping through the hierarchy.
+
 ## [17.2.15-sm.1] - 2026-08-13
 
 ### Added

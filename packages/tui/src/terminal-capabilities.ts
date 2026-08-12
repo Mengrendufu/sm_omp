@@ -3,6 +3,7 @@ import { $env, isBunTestRuntime, isTerminalHeadless } from "@oh-my-pi/pi-utils";
 import { sendDesktopNotification, shouldDeliverDesktopNotification } from "./desktop-notify";
 import {
 	detectKittyUnicodePlaceholdersSupport,
+	encodeKittyVirtualPlacement,
 	getKittyGraphics,
 	KITTY_PLACEHOLDER,
 	kittyPlaceholdersFit,
@@ -1060,13 +1061,14 @@ export function renderImage(
 			// `a=p` placement. Falls back to direct placement when disabled or when the
 			// grid exceeds the diacritic table's addressable cell range.
 			if (graphics.unicodePlaceholders && kittyPlaceholdersFit(fit.columns, fit.rows)) {
-				const lines = renderKittyPlaceholderLines({
-					imageId: options.imageId,
-					placementId,
-					columns: fit.columns,
+				const placement = { imageId: options.imageId, placementId, columns: fit.columns, rows: fit.rows };
+				const lines = renderKittyPlaceholderLines(placement);
+				return {
+					sequence: encodeKittyVirtualPlacement(placement),
+					lines,
 					rows: fit.rows,
-				});
-				return { lines, rows: fit.rows, transmit };
+					transmit,
+				};
 			}
 			// Direct placement: re-emit only the tiny `a=p` on repaints.
 			const sequence = encodeKittyPlacement({

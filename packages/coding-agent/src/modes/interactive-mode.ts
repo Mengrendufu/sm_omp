@@ -120,7 +120,7 @@ import type { ConfiguredThinkingLevel } from "../thinking";
 import { tinyTitleClient } from "../tiny/title-client";
 import type { LspStartupServerInfo } from "../tools";
 import { normalizeLocalScheme } from "../tools/path-utils";
-import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../tools/render-utils";
+import { replaceTabs, truncateToWidth } from "../tools/render-utils";
 import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
 import {
 	formatPhaseDisplayName,
@@ -430,21 +430,22 @@ const MODEL_CYCLE_TRACK_CLEAR_MS = 4000;
 const SUBAGENT_HUD_VISIBLE_LIMIT = 8;
 const SUBAGENT_OBSERVER_UI_COALESCE_MS = 100;
 
+function isRunningDetachedSubagent(session: ObservableSession): boolean {
+	return session.kind === "subagent" && session.status === "active" && session.detached === true;
+}
+
 /**
  * Build the anchored subagent HUD block: a bold accent "Subagents" header plus
- * a bounded set of running-agent rows in the same `Id: description` shape the
- * inline task rows use (muted task preview when no description was given).
- * Layout mirrors the Todos HUD exactly: unindented header, then
- * `renderTreeList` rows (dim connectors) shifted right by one space.
+ * a bounded set of running-agent items. Every item uses two physical rows:
+ * `Id:` on the branch row and description/task on the continuation row, so a
+ * narrow Sidebar cannot wrap the value through the tree hierarchy.
  * Only detached background spawns are listed: a sync task call blocks the
  * parent turn and its inline tool block already renders progress live, and
  * eval `agent()` spawns are rendered by their own eval cell tree.
  * Returns an empty array when nothing is running so the container can clear.
  */
 export function renderSubagentHudLines(sessions: ObservableSession[], columns: number): string[] {
-	const running = sessions.filter(
-		session => session.kind === "subagent" && session.status === "active" && session.detached === true,
-	);
+	const running = sessions.filter(isRunningDetachedSubagent);
 	if (running.length === 0) return [];
 
 	const dot = theme.styledSymbol("status.done", "accent");
@@ -455,29 +456,49 @@ export function renderSubagentHudLines(sessions: ObservableSession[], columns: n
 			items: visible,
 			expanded: true,
 			renderItem: session => {
-				const displayId = formatTaskId(session.id);
-				let line = `${dot} ${theme.fg("accent", theme.bold(displayId))}`;
+				const idBudget = Math.max(1, columns - 7);
+				const displayId = truncateToWidth(formatTaskId(session.id), idBudget);
+				const header = `${dot} ${theme.fg("accent", theme.bold(displayId))}${theme.fg("accent", ":")}`;
+				const detailBudget = Math.max(1, columns - 4);
 				const description = session.description?.trim() || session.progress?.description?.trim();
 				if (description) {
-					const budget = Math.max(TRUNCATE_LENGTHS.SHORT, columns - visibleWidth(displayId) - 10);
-					line += `${theme.fg("accent", ":")} ${theme.fg("accent", truncateToWidth(replaceTabs(description), budget))}`;
-				} else {
-					// No spawn description: fall back to a muted task preview, same as
-					// the inline task rows when a row has no label.
-					const taskPreview = session.progress?.task?.trim();
-					if (taskPreview) {
-						line += ` ${theme.fg("muted", truncateToWidth(replaceTabs(taskPreview), TRUNCATE_LENGTHS.SHORT))}`;
-					}
+					return [header, theme.fg("accent", truncateToWidth(replaceTabs(description), detailBudget))];
 				}
-				return line;
+				const taskPreview = session.progress?.task?.trim();
+				if (taskPreview) {
+					return [header, theme.fg("muted", truncateToWidth(replaceTabs(taskPreview), detailBudget))];
+				}
+				return [header, theme.fg("muted", truncateToWidth("Running", detailBudget))];
 			},
 		},
 		theme,
 	);
 	if (hiddenCount > 0) {
-		rows.push(theme.fg("dim", `… ${hiddenCount} more running — open Agent Hub for full list`));
+		rows.push(
+			theme.fg(
+				"dim",
+				truncateToWidth(`… ${hiddenCount} more running — open Agent Hub for full list`, Math.max(1, columns - 1)),
+			),
+		);
 	}
 	return ["", theme.bold(theme.fg("accent", "Subagents")), ...rows.map(line => ` ${line}`)];
+}
+
+/** Width-aware wrapper: the Sidebar owns final geometry, not settings callers. */
+class SubagentHud implements Component {
+	#renderedWidth = -1;
+	#text = new Text("", 1, 0);
+
+	constructor(private readonly sessions: ObservableSession[]) {}
+
+	render(width: number): readonly string[] {
+		if (width !== this.#renderedWidth) {
+			this.#renderedWidth = width;
+			const lines = renderSubagentHudLines(this.sessions, Math.max(1, width - 2));
+			this.#text.setText(lines.join("\n"));
+		}
+		return this.#text.render(width);
+	}
 }
 
 const CTRL_L_APPEARANCE_RESPONSE_DEADLINE_MS = 2000;
@@ -2329,9 +2350,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#renderSubagentList(): void {
 		this.subagentContainer.clear();
-		const lines = renderSubagentHudLines(this.#observerRegistry.getSessions(), this.ui.terminal.columns);
-		if (lines.length === 0) return;
-		this.subagentContainer.addChild(new Text(lines.join("\n"), 1, 0));
+		const sessions = this.#observerRegistry.getSessions();
+		if (!sessions.some(isRunningDetachedSubagent)) return;
+		this.subagentContainer.addChild(new SubagentHud(sessions));
 	}
 
 	async #loadTodoList(): Promise<void> {

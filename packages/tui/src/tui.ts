@@ -20,9 +20,10 @@ import { performance } from "node:perf_hooks";
 import { $flag, getDebugLogPath } from "@oh-my-pi/pi-utils";
 import { DEFAULT_MAX_INLINE_IMAGES, ImageBudget } from "./components/image";
 import { planDeccaraFills } from "./deccara";
-import { FullscreenViewport, type ScrollInfo } from "./fullscreen";
+import { clippedFullscreenDockHeight, FullscreenViewport, type ScrollInfo } from "./fullscreen";
 import { getKeybindings } from "./keybindings";
 import { isKeyRelease, matchesKey } from "./keys";
+import { getKittyGraphics } from "./kitty-graphics";
 import { LoopWatchdog } from "./loop-watchdog";
 import { routeSgrMouseInput } from "./mouse";
 import { type PaneFocus, type PaneScrollInfo, PanesViewport, type PanesViewportOptions } from "./panes";
@@ -1216,6 +1217,9 @@ export class TUI extends Container {
 	// render() call inside #doRender (the scratch set below, reused per frame).
 	#partialComposeRoots: Set<Component> | null = null;
 	#partialComposeRootsScratch = new Set<Component>();
+	#graphicsSuppressedRoot: Component | null = null;
+	#preRenderedRoot: Component | null = null;
+	#preRenderedRootLines: readonly string[] | null = null;
 	// Target component -> containing root child, so animation-rate requests do
 	// not re-walk a huge transcript subtree every frame.
 	#componentRootCache = new WeakMap<Component, Component>();
@@ -1272,6 +1276,7 @@ export class TUI extends Container {
 	/** Return to the ordinary append-only native-scrollback renderer. */
 	exitFullscreen(): void {
 		if (!this.#fullscreen) return;
+		this.#purgeInlineImages();
 		this.#fullscreen = undefined;
 		this.requestRender(true);
 	}
@@ -1306,6 +1311,7 @@ export class TUI extends Container {
 	/** Return from the multi-pane layout to the ordinary renderer. */
 	exitPanes(): void {
 		if (!this.#panes) return;
+		this.#purgeInlineImages();
 		this.#panes = undefined;
 		this.requestRender(true);
 	}
@@ -1374,12 +1380,17 @@ export class TUI extends Container {
 		for (let index = 0; index < children.length; index++) {
 			const child = children[index]!;
 			const previous = previousSegments[index];
+			const preRenderedLines = this.#preRenderedRoot === child ? this.#preRenderedRootLines : null;
 			// Component-scoped frame: a root child outside every requested
 			// subtree provably did not change (content mutations route through
 			// a render request, which would have made this frame a full one) —
 			// reuse its previous rows and seam report without calling render().
 			const reuse =
-				partialRoots !== null && previous !== undefined && previous.component === child && !partialRoots.has(child);
+				preRenderedLines === null &&
+				partialRoots !== null &&
+				previous !== undefined &&
+				previous.component === child &&
+				!partialRoots.has(child);
 			let childLines: readonly string[];
 			let liveLocalStart: number | undefined;
 			let liveRegionPinned = false;
@@ -1400,7 +1411,11 @@ export class TUI extends Container {
 				const prevRows = previous !== undefined && previous.component === child ? previous.rowCount : 0;
 				const prevStart = previous !== undefined && previous.component === child ? previous.start : offset;
 				setNativeScrollbackCommittedRows(child, Math.min(prevRows, Math.max(0, this.#committedRows - prevStart)));
-				childLines = child.render(width);
+				childLines =
+					preRenderedLines ??
+					(this.#graphicsSuppressedRoot === child
+						? this.#imageBudget.withGraphicsSuppressed(() => child.render(width))
+						: child.render(width));
 				const liveRegionStart = getNativeScrollbackLiveRegionStart(child);
 				if (liveRegionStart !== undefined) {
 					liveLocalStart = Number.isFinite(liveRegionStart)
@@ -4385,6 +4400,17 @@ export class TUI extends Container {
 		this.terminal.write(buffer);
 	}
 
+	/**
+	 * Render one persistent fixed-grid root under the graphics policy shared by
+	 * fullscreen and panes layouts.
+	 */
+	#renderViewportGraphics<T>(maxHeightCells: number, render: () => T): T {
+		if (TERMINAL.imageProtocol === ImageProtocol.Kitty && getKittyGraphics().unicodePlaceholders) {
+			return this.#imageBudget.withViewportGraphics(maxHeightCells, render);
+		}
+		return this.#imageBudget.withGraphicsSuppressed(render);
+	}
+
 	/** Compose and paint the persistent conversation/input/sidebar frame. */
 	#renderPanesFrame(width: number, height: number): void {
 		const panes = this.#panes;
@@ -4394,11 +4420,23 @@ export class TUI extends Container {
 		if (panes.viewport.sidebarMode() === "hidden" && panes.viewport.focus() === "sidebar") {
 			this.#focusPaneComponent("input");
 		}
-		const content = this.#imageBudget.withGraphicsSuppressed(() => ({
-			conversation: panes.conversation.render(contentWidths.conversation),
-			input: panes.input.render(contentWidths.input),
-			sidebar: panes.viewport.sidebarMode() === "hidden" ? [] : panes.sidebar.render(contentWidths.sidebar),
-		}));
+		const measuredInput = this.#imageBudget.withGraphicsSuppressed(() => panes.input.render(contentWidths.input));
+		const paneHeights = panes.viewport.paneHeights(measuredInput.length, height);
+		const graphicsEnabled = TERMINAL.imageProtocol === ImageProtocol.Kitty && getKittyGraphics().unicodePlaceholders;
+		if (graphicsEnabled) this.#imageBudget.beginPass();
+		const content = {
+			conversation: this.#renderViewportGraphics(Math.max(1, paneHeights.conversation - 1), () =>
+				panes.conversation.render(contentWidths.conversation),
+			),
+			input: measuredInput,
+			sidebar:
+				panes.viewport.sidebarMode() === "hidden"
+					? []
+					: this.#renderViewportGraphics(Math.max(1, paneHeights.sidebar - 2), () =>
+							panes.sidebar.render(contentWidths.sidebar),
+						),
+		};
+		if (graphicsEnabled) this.#imageBudget.endPass();
 		this.#resizeEventPending = false;
 		this.#clearScrollbackOnNextRender = false;
 
@@ -4419,18 +4457,36 @@ export class TUI extends Container {
 		const fullscreen = this.#fullscreen;
 		if (!fullscreen) return;
 
-		const partialRoots = componentScopedOnly ? this.#resolveFullscreenPartialComposeRoots(width) : null;
+		const measuredDock = this.#imageBudget.withGraphicsSuppressed(() => fullscreen.dock.render(width));
+		const dockHeight = clippedFullscreenDockHeight(measuredDock.length, height);
+		const transcriptHeight = Math.max(1, height - dockHeight);
+		const graphicsEnabled = TERMINAL.imageProtocol === ImageProtocol.Kitty && getKittyGraphics().unicodePlaceholders;
+		const partialRoots =
+			componentScopedOnly && (!graphicsEnabled || this.#imageBudget.quiescent)
+				? this.#resolveFullscreenPartialComposeRoots(width)
+				: null;
 		this.#componentRenderTargets.clear();
+		this.#graphicsSuppressedRoot = fullscreen.dock;
+		this.#preRenderedRoot = fullscreen.dock;
+		this.#preRenderedRootLines = measuredDock;
 		let rawFrame: readonly string[];
-		if (partialRoots !== null) {
-			this.#partialComposeRoots = partialRoots;
-			try {
-				rawFrame = this.#imageBudget.withGraphicsSuppressed(() => this.render(width));
-			} finally {
-				this.#partialComposeRoots = null;
+		try {
+			if (partialRoots !== null) {
+				this.#partialComposeRoots = partialRoots;
+				try {
+					rawFrame = this.#imageBudget.withGraphicsSuppressed(() => this.render(width));
+				} finally {
+					this.#partialComposeRoots = null;
+				}
+			} else {
+				if (graphicsEnabled) this.#imageBudget.beginPass();
+				rawFrame = this.#renderViewportGraphics(transcriptHeight, () => this.render(width));
+				if (graphicsEnabled) this.#imageBudget.endPass();
 			}
-		} else {
-			rawFrame = this.#imageBudget.withGraphicsSuppressed(() => this.render(width));
+		} finally {
+			this.#graphicsSuppressedRoot = null;
+			this.#preRenderedRoot = null;
+			this.#preRenderedRootLines = null;
 		}
 		this.#resizeEventPending = false;
 		this.#clearScrollbackOnNextRender = false;
@@ -4495,16 +4551,17 @@ export class TUI extends Container {
 	): void {
 		const fitted: string[] = new Array(height);
 		for (let r = 0; r < height; r++) fitted[r] = lines[r] ?? "";
-		// Native fullscreen overlays may contain image previews. Persistent fixed
-		// layout forces transcript images to text and must not transmit graphics.
-		if (cursorPos === undefined) {
-			const imageTransmits = this.#imageBudget.takeTransmits();
-			if (imageTransmits.length > 0) {
-				let transmitBuffer = "";
-				for (const seq of imageTransmits) transmitBuffer += seq;
-				this.terminal.write(transmitBuffer);
-			}
+		// Purges land before any replacement data/placement; then image data must
+		// reach the terminal store before virtual placements and placeholder cells.
+		let graphicsPrelude = "";
+		if (TERMINAL.imageProtocol === ImageProtocol.Kitty) {
+			for (const id of this.#imageBudget.takePurgeIds()) graphicsPrelude += encodeKittyDeleteImage(id);
+		} else {
+			this.#imageBudget.takePurgeIds();
 		}
+		for (const sequence of this.#imageBudget.takeTransmits()) graphicsPrelude += sequence;
+		for (const sequence of this.#imageBudget.takePlacements()) graphicsPrelude += sequence;
+		if (graphicsPrelude) this.terminal.write(graphicsPrelude);
 		// Skip an identical repaint (the modal is mostly static between
 		// keystrokes) — unless a forced repaint (resetDisplay,
 		// requestRender(true)) is pending: the redraw gesture must repair a

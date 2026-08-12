@@ -1,9 +1,9 @@
 /**
  * Contract: the anchored subagent HUD (rendered above the editor, next to the
- * Todos block) lists exactly the running *detached* subagents as
- * `Id: description` rows and yields no output once nothing qualifies, so the
- * block self-clears. Sync task spawns and eval `agent()` spawns are excluded:
- * their progress is already rendered inline (tool block / eval cell).
+ * Todos block) lists exactly the running *detached* subagents as a two-line
+ * tree item (`Id:` then description/task) and yields no output once nothing
+ * qualifies, so the block self-clears. Sync task spawns and eval `agent()`
+ * spawns are excluded: their progress is already rendered inline.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
@@ -97,14 +97,22 @@ describe("subagent HUD lines", () => {
 		await initTheme();
 	});
 
-	it("renders running subagents as Id: description under a Subagents header", () => {
+	it("renders every running subagent as a two-line tree item", () => {
 		const out = render([
 			makeSession({ id: "AuthLoader", description: "Refactoring the auth flow" }),
 			makeSession({ id: "SchemaMigrator", description: "Migrating the users table" }),
 		]);
 		expect(out).toContain("Subagents");
-		expect(out).toContain("AuthLoader: Refactoring the auth flow");
-		expect(out).toContain("SchemaMigrator: Migrating the users table");
+		expect(out).toMatch(/├─ • AuthLoader:\n\s*│\s+Refactoring the auth flow/);
+		expect(out).toMatch(/└─ • SchemaMigrator:\n\s+Migrating the users table/);
+		expect(out).not.toContain("AuthLoader: Refactoring");
+	});
+
+	it("keeps an empty-metadata subagent as a two-line item", () => {
+		const lines = render([makeSession({ id: "NoDetails" })]).split("\n");
+		expect(lines).toHaveLength(4);
+		expect(lines[2]).toContain("NoDetails:");
+		expect(lines[3]).toContain("Running");
 	});
 
 	it("only shows active subagents and clears once everything finished", () => {
@@ -116,7 +124,7 @@ describe("subagent HUD lines", () => {
 		expect(renderSubagentHudLines(sessions, 120)).toEqual([]);
 
 		const out = render([...sessions, makeSession({ id: "StillRunning", description: "live work" })]);
-		expect(out).toContain("StillRunning: live work");
+		expect(out).toMatch(/StillRunning:\n\s+live work/);
 		expect(out).not.toContain("Done-");
 		expect(out).not.toContain("Main Session");
 	});
@@ -125,12 +133,12 @@ describe("subagent HUD lines", () => {
 		const fromProgressDesc = render([
 			makeSession({ id: "Worker", progress: makeProgress({ id: "Worker", description: "From progress" }) }),
 		]);
-		expect(fromProgressDesc).toContain("Worker: From progress");
+		expect(fromProgressDesc).toMatch(/Worker:\n\s+From progress/);
 
 		const fromTask = render([
 			makeSession({ id: "Worker", progress: makeProgress({ id: "Worker", task: "Investigate flaky CI on macOS" }) }),
 		]);
-		expect(fromTask).toContain("Worker Investigate flaky CI on macOS");
+		expect(fromTask).toMatch(/Worker:\n\s+Investigate flaky CI on macOS/);
 	});
 
 	it("hides non-detached spawns: sync task calls and eval agent() helpers", () => {
@@ -143,7 +151,7 @@ describe("subagent HUD lines", () => {
 		expect(renderSubagentHudLines(sessions, 120)).toEqual([]);
 
 		const out = render([...sessions, makeSession({ id: "BackgroundSpawn", description: "detached work" })]);
-		expect(out).toContain("BackgroundSpawn: detached work");
+		expect(out).toMatch(/BackgroundSpawn:\n\s+detached work/);
 		expect(out).not.toContain("SyncSpawn");
 		expect(out).not.toContain("EvalSpawn");
 	});
@@ -158,8 +166,8 @@ describe("subagent HUD lines", () => {
 		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, makeProgressPayload("FromProgress", 2, "background work", true));
 
 		const out = render(registry.getSessions());
-		expect(out).toContain("Detached: background work");
-		expect(out).toContain("FromProgress: background work");
+		expect(out).toMatch(/Detached:\n\s*│\s+background work/);
+		expect(out).toMatch(/FromProgress:\n\s+background work/);
 		expect(out).not.toContain("Inline");
 	});
 
@@ -220,10 +228,10 @@ describe("subagent HUD lines", () => {
 		const out = render(active, 120);
 
 		for (const session of active.slice(0, 8)) {
-			expect(out).toContain(`${session.id}: ${session.description}`);
+			expect(out).toMatch(new RegExp(`${session.id}:\\n\\s*(?:│\\s+)?${session.description}`));
 		}
 		for (const session of active.slice(8)) {
-			expect(out).not.toContain(`${session.id}: ${session.description}`);
+			expect(out).not.toContain(`${session.id}:`);
 		}
 		expect(out).toContain("2 more running");
 	});
@@ -298,9 +306,28 @@ describe("InteractiveMode subagent observer UI sync", () => {
 		await Promise.resolve();
 
 		const hud = Bun.stripANSI(mode.subagentContainer.render(120).join("\n"));
-		expect(hud).toContain("BurstAgent0: Burst job 0");
-		expect(hud).toContain("BurstAgent5: Burst job 5");
+		expect(hud).toMatch(/BurstAgent0:\s*\n\s*│\s+Burst job 0/);
+		expect(hud).toMatch(/BurstAgent5:\s*\n\s+Burst job 5/);
 		expect(rebuildHud).toHaveBeenCalledTimes(1);
 		expect(requestRender).toHaveBeenCalledTimes(1);
+	});
+
+	it("renders against the actual Sidebar width without adding wrapped rows", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		vi.useFakeTimers();
+		eventBus.emit(
+			TASK_SUBAGENT_PROGRESS_CHANNEL,
+			makeProgressPayload("NarrowAgent", 0, "A description that is much wider than the rendered Sidebar", true),
+		);
+
+		await Promise.resolve();
+		vi.runAllTimers();
+		await Promise.resolve();
+
+		const lines = mode.subagentContainer.render(18);
+		expect(lines).toHaveLength(4);
+		for (const line of lines) {
+			expect(Bun.stringWidth(line)).toBeLessThanOrEqual(18);
+		}
 	});
 });

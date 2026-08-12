@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [17.2.15-sm.2] - 2026-08-13
+
+### Fixed
+
+- Fixed pane and fixed-layout inline graphics by allowing only Kitty Unicode-placeholder cells, constraining output images to their measured owning viewport, emitting virtual placements before sliced frame rows, keeping pane Input and fixed dock images on height-stable fallbacks, and purging tracked images on budget demotion or layout exit.
+
 ## [17.2.15-sm.1] - 2026-08-13
 
 ### Added

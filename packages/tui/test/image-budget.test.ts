@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { TUI } from "@oh-my-pi/pi-tui";
+import { Container, TUI } from "@oh-my-pi/pi-tui";
 import { Image, ImageBudget } from "@oh-my-pi/pi-tui/components/image";
 import { Text } from "@oh-my-pi/pi-tui/components/text";
 import {
@@ -600,7 +600,8 @@ describe("TUI inline-image budget", () => {
 		);
 	}
 
-	it("uses text fallbacks without transmitting image data in fixed layout", async () => {
+	it("renders Kitty Unicode-placeholder images in fixed layout", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
 		const term = new VirtualTerminal(40, 8);
 		const writes: string[] = [];
 		const realWrite = term.write.bind(term);
@@ -608,6 +609,7 @@ describe("TUI inline-image budget", () => {
 			writes.push(data);
 			realWrite(data);
 		});
+		setKittyGraphics({ unicodePlaceholders: true });
 		const tui = new TUI(term);
 		const image = makeImage(tui.imageBudget, "fixed");
 		const dock = new Text("prompt", 0, 0);
@@ -620,14 +622,327 @@ describe("TUI inline-image budget", () => {
 			await settle(term);
 
 			const output = writes.join("");
-			expect(output).not.toContain("\x1b_Ga=t");
-			expect(output).not.toContain(BASE64_ONE_PIXEL_PNG);
-			expect(term.getViewport().some(line => line.includes("[Image:"))).toBe(true);
+			expect(output).toContain("\x1b_Ga=t");
+			expect(output).toContain(BASE64_ONE_PIXEL_PNG);
+			expect(output).toContain("U=1");
+			expect(output).toContain(KITTY_PLACEHOLDER);
+			expect(output).not.toContain("[Image:");
 			expect([...tui.imageBudget.takeTransmits()]).toEqual([]);
 		} finally {
 			tui.stop();
+			setKittyGraphics(originalGraphics);
 		}
 	});
+
+	it("keeps fixed layouts on text fallback when Kitty Unicode placeholders are unavailable", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 8);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+		setKittyGraphics({ unicodePlaceholders: false });
+		const tui = new TUI(term);
+		const image = makeImage(tui.imageBudget, "fixed-direct");
+		const dock = new Text("prompt", 0, 0);
+		tui.addChild(image);
+		tui.addChild(dock);
+		tui.enterFullscreen({ scroll: [image], dock });
+
+		try {
+			tui.start();
+			await settle(term);
+
+			const output = writes.join("");
+			expect(output).not.toContain("\x1b_Ga=t");
+			expect(output).not.toContain(BASE64_ONE_PIXEL_PNG);
+			expect(output).not.toContain(KITTY_PLACEHOLDER);
+			expect(term.getViewport().some(line => line.includes("[Image:"))).toBe(true);
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
+	it("fits large pane images within the owning Conversation content area", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 8);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+		setKittyGraphics({ unicodePlaceholders: true });
+		const tui = new TUI(term);
+		const conversation = new Image(
+			BASE64_ONE_PIXEL_PNG,
+			"image/png",
+			{ fallbackColor: text => text },
+			{ budget: tui.imageBudget, imageKey: "large-pane" },
+			{ widthPx: 10_000, heightPx: 10_000 },
+		);
+		const input = new Text("prompt", 0, 0);
+		const sidebar = new Text("side", 0, 0);
+		tui.addChild(conversation);
+		tui.addChild(input);
+		tui.addChild(sidebar);
+		tui.enterPanes({
+			conversation,
+			input,
+			inputFocus: input,
+			sidebar,
+			sidebarWidth: 12,
+			minLeftWidth: 12,
+			narrowWidth: 24,
+		});
+
+		try {
+			tui.start();
+			await settle(term);
+
+			const output = writes.join("");
+			expect(output).toContain("U=1");
+			expect(output).toMatch(/a=p,U=1,q=2,i=\d+,p=\d+,c=4,r=4/);
+			expect(term.getViewport()[4]).toMatch(/^╰/);
+			expect(term.getViewport()[5]).toContain("prompt");
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
+	it("emits the virtual placement before a pane slice that starts inside an image", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 8);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+		setKittyGraphics({ unicodePlaceholders: true });
+		const tui = new TUI(term);
+		const conversation = new Container();
+		conversation.addChild(
+			new Image(
+				BASE64_ONE_PIXEL_PNG,
+				"image/png",
+				{ fallbackColor: text => text },
+				{ budget: tui.imageBudget, imageKey: "clipped-pane" },
+				{ widthPx: 10_000, heightPx: 10_000 },
+			),
+		);
+		conversation.addChild(new Text("after-0\nafter-1", 0, 0));
+		const input = new Text("prompt", 0, 0);
+		const sidebar = new Text("side", 0, 0);
+		tui.addChild(conversation);
+		tui.addChild(input);
+		tui.addChild(sidebar);
+		tui.enterPanes({
+			conversation,
+			input,
+			inputFocus: input,
+			sidebar,
+			sidebarWidth: 12,
+			minLeftWidth: 12,
+			narrowWidth: 24,
+		});
+
+		try {
+			tui.start();
+			await settle(term);
+
+			const output = writes.join("");
+			const placement = output.indexOf("a=p,U=1");
+			const placeholder = output.indexOf(KITTY_PLACEHOLDER);
+			expect(placement).toBeGreaterThanOrEqual(0);
+			expect(placeholder).toBeGreaterThan(placement);
+			expect(term.getViewport().some(line => line.includes("after-0"))).toBe(true);
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
+	it("emits the virtual placement before a fixed-layout slice that starts inside an image", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 8);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+		setKittyGraphics({ unicodePlaceholders: true });
+		const tui = new TUI(term);
+		const conversation = new Container();
+		conversation.addChild(
+			new Image(
+				BASE64_ONE_PIXEL_PNG,
+				"image/png",
+				{ fallbackColor: text => text },
+				{ budget: tui.imageBudget, imageKey: "clipped-fixed" },
+				{ widthPx: 10_000, heightPx: 10_000 },
+			),
+		);
+		conversation.addChild(new Text("after-0\nafter-1\nafter-2", 0, 0));
+		const dock = new Text("prompt", 0, 0);
+		tui.addChild(conversation);
+		tui.addChild(dock);
+		tui.enterFullscreen({ scroll: [conversation], dock });
+
+		try {
+			tui.start();
+			await settle(term);
+
+			const output = writes.join("");
+			const placement = output.indexOf("a=p,U=1");
+			const placeholder = output.indexOf(KITTY_PLACEHOLDER);
+			expect(placement).toBeGreaterThanOrEqual(0);
+			expect(placeholder).toBeGreaterThan(placement);
+			expect(term.getViewport().some(line => line.includes("after-2"))).toBe(true);
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
+	it("keeps pane Input graphics on fallback so one height calculation owns composition", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 12);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+		setKittyGraphics({ unicodePlaceholders: true });
+		const tui = new TUI(term);
+		const conversation = makeImage(tui.imageBudget, "conversation-image");
+		const input = new Container();
+		input.addChild(makeImage(tui.imageBudget, "input-image"));
+		input.addChild(new Text("draft-0\ndraft-1\ndraft-2", 0, 0));
+		const sidebar = new Text("side", 0, 0);
+		tui.addChild(conversation);
+		tui.addChild(input);
+		tui.addChild(sidebar);
+		tui.enterPanes({
+			conversation,
+			input,
+			inputFocus: input,
+			sidebar,
+			sidebarWidth: 12,
+			minLeftWidth: 12,
+			narrowWidth: 24,
+		});
+
+		try {
+			tui.start();
+			await settle(term);
+
+			const output = writes.join("");
+			expect(output.match(/a=p,U=1/g) ?? []).toHaveLength(1);
+			expect(term.getViewport().some(line => line.includes("[Image:"))).toBe(true);
+			expect(term.getViewport().some(line => line.includes("draft-2"))).toBe(true);
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
+	it("uses the measured fixed-layout dock height and keeps dock graphics on fallback", async () => {
+		const originalGraphics = { ...getKittyGraphics() };
+		const term = new VirtualTerminal(40, 12);
+		const writes: string[] = [];
+		const realWrite = term.write.bind(term);
+		vi.spyOn(term, "write").mockImplementation((data: string) => {
+			writes.push(data);
+			realWrite(data);
+		});
+		setKittyGraphics({ unicodePlaceholders: true });
+		const tui = new TUI(term);
+		const conversation = new Image(
+			BASE64_ONE_PIXEL_PNG,
+			"image/png",
+			{ fallbackColor: text => text },
+			{ budget: tui.imageBudget, imageKey: "fixed-conversation" },
+			{ widthPx: 10_000, heightPx: 10_000 },
+		);
+		const dock = new Container();
+		dock.addChild(makeImage(tui.imageBudget, "fixed-dock"));
+		dock.addChild(new Text("dock-0\ndock-1\ndock-2\ndock-3", 0, 0));
+		tui.addChild(conversation);
+		tui.addChild(dock);
+		tui.enterFullscreen({ scroll: [conversation], dock });
+
+		try {
+			tui.start();
+			await settle(term);
+
+			const output = writes.join("");
+			expect(output.match(/a=p,U=1/g) ?? []).toHaveLength(1);
+			expect(output).toMatch(/a=p,U=1,q=2,i=\d+,p=\d+,c=\d+,r=7/);
+			expect(term.getViewport().some(line => line.includes("[Image:"))).toBe(true);
+			expect(term.getViewport().some(line => line.includes("dock-3"))).toBe(true);
+		} finally {
+			tui.stop();
+			setKittyGraphics(originalGraphics);
+		}
+	});
+
+	for (const layout of ["panes", "fixed"] as const) {
+		it(`purges Kitty resources when exiting ${layout} layout`, async () => {
+			const originalGraphics = { ...getKittyGraphics() };
+			const term = new VirtualTerminal(40, 8);
+			const writes: string[] = [];
+			const realWrite = term.write.bind(term);
+			vi.spyOn(term, "write").mockImplementation((data: string) => {
+				writes.push(data);
+				realWrite(data);
+			});
+			setKittyGraphics({ unicodePlaceholders: true });
+			const tui = new TUI(term);
+			const image = makeImage(tui.imageBudget, `exit-${layout}`);
+			const input = new Text("prompt", 0, 0);
+			tui.addChild(image);
+			tui.addChild(input);
+			if (layout === "panes") {
+				const sidebar = new Text("side", 0, 0);
+				tui.addChild(sidebar);
+				tui.enterPanes({
+					conversation: image,
+					input,
+					inputFocus: input,
+					sidebar,
+					sidebarWidth: 12,
+					minLeftWidth: 12,
+					narrowWidth: 24,
+				});
+			} else {
+				tui.enterFullscreen({ scroll: [image], dock: input });
+			}
+
+			try {
+				tui.start();
+				await settle(term);
+				writes.length = 0;
+
+				if (layout === "panes") tui.exitPanes();
+				else tui.exitFullscreen();
+				await settle(term);
+
+				const output = writes.join("");
+				expect(output).toContain("a=d,d=I");
+				expect(output).toContain(BASE64_ONE_PIXEL_PNG);
+			} finally {
+				tui.stop();
+				setKittyGraphics(originalGraphics);
+			}
+		});
+	}
 
 	it("renders following text below a multi-row direct Kitty placement", async () => {
 		const originalGraphics = { ...getKittyGraphics() };

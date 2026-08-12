@@ -41,6 +41,12 @@ export interface PaneContentWidths {
 	sidebar: number;
 }
 
+export interface PaneHeights {
+	conversation: number;
+	input: number;
+	sidebar: number;
+}
+
 export interface PaneScrollInfo {
 	following: boolean;
 	linesBelow: number;
@@ -178,6 +184,24 @@ export class PanesViewport {
 		};
 	}
 
+	/** Resolve fixed-grid region heights before rendering height-bounded content. */
+	paneHeights(inputRows: number, height: number): PaneHeights {
+		const frameHeight = Math.max(0, Math.trunc(height));
+		const inputMaxHeight = Math.max(3, Math.trunc(this.#options.inputMaxHeight ?? 12));
+		const minimumInputHeight = Math.min(3, frameHeight);
+		const maximumInputHeight = Math.min(
+			frameHeight,
+			Math.max(minimumInputHeight, Math.min(inputMaxHeight, frameHeight - 3)),
+		);
+		const inputHeight = clamp(inputRows, minimumInputHeight, maximumInputHeight);
+		const conversationHeight = Math.max(0, frameHeight - inputHeight);
+		return {
+			conversation: conversationHeight,
+			input: inputHeight,
+			sidebar: conversationHeight,
+		};
+	}
+
 	#horizontalLayout(width: number): {
 		frameWidth: number;
 		leftWidth: number;
@@ -211,14 +235,9 @@ export class PanesViewport {
 		const { frameWidth, leftWidth, sidebarWidth, sidebarMode } = this.#horizontalLayout(width);
 		this.#lastSidebarMode = sidebarMode;
 		const frameHeight = Math.max(0, Math.trunc(height));
-		const inputMaxHeight = Math.max(3, Math.trunc(this.#options.inputMaxHeight ?? 12));
-		const minimumInputHeight = Math.min(3, frameHeight);
-		const maximumInputHeight = Math.min(
-			frameHeight,
-			Math.max(minimumInputHeight, Math.min(inputMaxHeight, frameHeight - 3)),
-		);
-		const inputHeight = clamp(content.input.length, minimumInputHeight, maximumInputHeight);
-		const conversationHeight = Math.max(0, frameHeight - inputHeight);
+		const paneHeights = this.paneHeights(content.input.length, frameHeight);
+		const inputHeight = paneHeights.input;
+		const conversationHeight = paneHeights.conversation;
 		const conversationRect: PaneRect = { x: 0, y: 0, width: leftWidth, height: conversationHeight };
 		const inputRect: PaneRect = { x: 0, y: conversationHeight, width: frameWidth, height: inputHeight };
 		const sidebarRect: PaneRect | undefined =

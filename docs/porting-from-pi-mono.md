@@ -3,6 +3,12 @@
 This guide is a repeatable checklist for porting changes from pi-mono into this repo.
 Use it for any merge: single file, feature branch, or full release sync.
 
+This guide covers semantic ports from the historical `pi-mono` lineage. It
+does **not** define how the `sm_omp` fork tracks `can1357/oh-my-pi`, how `main`
+and `custom` are maintained, or how releases are rolled back. Use
+[`sm-omp-maintenance.md`](./sm-omp-maintenance.md) for that operational
+workflow.
+
 ## Last Sync Point (historical upstream marker)
 
 **Commit:** `b21b42d032919de2f2e6920a76fa9a37c3920c0a`

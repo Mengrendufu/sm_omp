@@ -15,6 +15,15 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 - If the UML model, repository rules, and implementation disagree, stop and report the inconsistency instead of inventing architecture facts.
 - After implementation, verify that code and UML still correspond; update the model when the settled architecture changes.
 
+## Fork Maintenance
+
+- [`docs/sm-omp-maintenance.md`](docs/sm-omp-maintenance.md) is the operational source of truth for Git remotes, branch ownership, upstream synchronization, verification, release tags, and rollback.
+- `origin` is `Mengrendufu/sm_omp`; `upstream` is the fetch-only `can1357/oh-my-pi` source and MUST retain a disabled push URL.
+- `main` is an exact `upstream/main` mirror and MUST receive only fast-forward upstream updates. `custom` is the default product branch and owns all sm_omp customization.
+- New customization branches from `custom`. Official updates flow `upstream/main` → `main` → `custom`; `custom` and feature branches NEVER merge into `main`.
+- Resolve synchronization conflicts semantically. NEVER use blanket `--ours`/`--theirs`, rebase published `custom` history, or force-push it.
+- Before publishing a synchronized or customized `custom` tip, run the runbook's automated checks and interactive TUI smoke test.
+
 ### Package Structure
 
 | Package                 | Description                                                                             |

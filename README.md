@@ -26,6 +26,13 @@ The most capable agent surface that ships. Continuously tuned by real-world use 
 
 **60+** providers · **31** built-in tools · **14** lsp ops · **28** dap ops · **~80k** lines of Rust core.
 
+> [!IMPORTANT]
+> This repository is **sm_omp**, a TUI-customized fork of
+> [`can1357/oh-my-pi`](https://github.com/can1357/oh-my-pi). `custom` is the
+> default product branch; `main` is an upstream mirror. Maintainers must follow
+> the [fork maintenance runbook](docs/sm-omp-maintenance.md) when developing,
+> synchronizing upstream, releasing, or rolling back.
+
 > [!NOTE]
 > Pull requests are **temporarily open to everyone** as a trial. We previously
 > required a vouch before accepting PRs; that requirement is lifted for now

@@ -26,6 +26,12 @@
 - Routed Page Up/Page Down and OpenCode message navigation (`Ctrl+Alt+Y/E`, `Ctrl+Alt+U/D`, `Ctrl+Alt+B/F`, `Ctrl+G`, and `Ctrl+Alt+G`) from a focused pane Input to the Conversation viewport without changing focus.
 - Fixed pane scrolling leaving old tool-output glyphs and frames at fixed screen coordinates by resetting SGR state and clearing each alternate-screen row before drawing its replacement.
 - Fixed pane drag-selection highlights disappearing on ANSI-styled transcript and sidebar text when embedded SGR resets canceled the selection background before painting its glyphs.
+## [17.3.0] - 2026-08-13
+
+### Fixed
+
+- Fixed an issue where repeated pane-width adjustments or terminal resizing could corrupt native scrollback and soft-wrap behavior.
+- Fixed an issue where scaled OSC 66 Markdown headings (such as "Large Headings" on Kitty) would render as invisible placeholders or get partially cleared after a redraw or terminal resize.
 
 ## [17.2.13] - 2026-08-11
 

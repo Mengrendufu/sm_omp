@@ -22,7 +22,7 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 - `main` is an exact `upstream/main` mirror and MUST receive only fast-forward upstream updates. `custom` is the default product branch and owns all sm_omp customization.
 - New customization branches from `custom`. Official updates flow `upstream/main` → `main` → `custom`; `custom` and feature branches NEVER merge into `main`.
 - Resolve synchronization conflicts semantically. NEVER use blanket `--ours`/`--theirs`, rebase published `custom` history, or force-push it.
-- Before publishing a synchronized or customized `custom` tip, run the runbook's automated checks and interactive TUI smoke test.
+- Before publishing a synchronized or customized `custom` tip, run the runbook's automated checks and interactive TUI smoke test. Publication requires official-baseline equivalence and verified custom-TUI behavior, not a completely green upstream repository; reproduce and record accepted upstream failures or infrastructure gaps instead of expanding the fork into Agent Runtime maintenance.
 
 ### Package Structure
 

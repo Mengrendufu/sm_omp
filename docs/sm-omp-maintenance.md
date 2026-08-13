@@ -123,6 +123,35 @@ A merge commit is intentional: it records the exact upstream integration
 boundary and keeps the customization lineage inspectable. Do not use a squash
 merge for upstream synchronization.
 
+### Synchronization acceptance policy
+
+`sm_omp` is a TUI-layout fork, not a parallel Agent Runtime. The acceptance
+standard for an upstream synchronization is **official-baseline equivalence plus
+custom-TUI correctness**, not a completely green upstream repository:
+
+1. Treat the target official revision as authoritative for agent, provider,
+   tool, session, and other non-TUI runtime semantics. Import those changes
+   instead of repairing or reimplementing them in `custom`.
+2. Block publication for a regression introduced by the merge, accidental
+   non-TUI divergence from the target official revision, or a failure of the
+   accepted sm_omp TUI contracts.
+3. Do not block publication solely because the target official revision has the
+   same failing test or known defect. Reproduce the same failure signature on a
+   clean checkout of that revision when practical.
+4. A pre-merge `custom` baseline can prove that a failure was not introduced by
+   the synchronization, but it must not justify preserving behavior that the
+   target official revision fixed.
+5. A missing optional test or build dependency is an infrastructure gap, not a
+   product regression. Record the exact missing command or dependency instead
+   of changing product code to make the check disappear.
+6. Record every accepted upstream-baseline failure and infrastructure gap in
+   the merge or release notes. Fix it only as separately approved work; do not
+   expand an upstream synchronization into Agent Runtime maintenance.
+
+The resulting `custom` tree may therefore retain failures present in the target
+official baseline. It must not add failures attributable to sm_omp integration,
+and its customized TUI must remain usable and verified.
+
 ## Conflict policy
 
 Never resolve an upstream synchronization with a blanket `--ours` or
@@ -154,8 +183,11 @@ git diff --check
 
 ## Verification gate
 
-An upstream sync or TUI customization is not ready to publish until all
-applicable checks pass from the merged `custom` tree.
+An upstream synchronization is ready to publish when the target official commit
+is integrated, no new sm_omp-caused regression remains, and the customized TUI
+passes its automated and interactive checks. Broader upstream checks are
+diagnostic comparisons; they are not required to become green when the target
+official baseline has the same failures.
 
 ### Required automated checks
 
@@ -168,8 +200,19 @@ git diff --check
 ```
 
 Add narrower regression tests for any upstream conflict or changed observable
-contract. Run broader package tests when the synchronized files extend beyond
-these TUI boundaries.
+TUI contract. Run broader package or repository checks when synchronized files
+extend beyond the TUI boundaries, then classify each failure:
+
+- A failure introduced only in merged `custom` blocks publication.
+- A matching failure on the target official revision is accepted upstream
+  baseline when it does not worsen in `custom`.
+- A pre-merge-only failure requires review; do not carry it forward when the
+  target official revision fixed it.
+- A check that cannot start because an optional tool is unavailable is recorded
+  as an infrastructure gap.
+
+Use isolated worktrees when a failure signature must be compared without module
+resolution or generated artifacts leaking between revisions.
 
 ### Required interactive smoke test
 
@@ -187,8 +230,9 @@ merge or release notes.
 
 ## Release tags
 
-Releases are cut from a clean, verified `custom` tip. Each annotated tag follows
-the official OMP base tag and adds the suffix `-sm.N`:
+Releases are cut from a clean `custom` tip verified under the synchronization
+acceptance policy. Each annotated tag follows the official OMP base tag and
+adds the suffix `-sm.N`:
 
 ```text
 v<upstream-version>-sm.<N>
@@ -213,6 +257,13 @@ The official base tag must already identify `main`; never recreate or move it
 on `custom`. A customized tag identifies an exact rollback point. Do not tag
 `main` as an sm_omp release, do not create mutable `latest` aliases, and do not
 move an existing release tag.
+
+A completely green broader repository suite is not a prerequisite for a
+customized tag when failures match the target official baseline or checks are
+blocked by recorded optional infrastructure gaps. The custom TUI checks and
+interactive smoke test remain mandatory. Include accepted failure signatures,
+missing dependencies, the official SHA, and the merge commit in the tag,
+merge, or release notes.
 
 ## Rollback
 
@@ -243,7 +294,12 @@ Before any unpublished destructive recovery, create a backup branch. Published
 - [ ] `origin/main` updated.
 - [ ] `main` merged into `custom` with an explicit merge commit.
 - [ ] Conflicts resolved semantically; no blanket side selection.
+- [ ] Non-TUI runtime behavior follows the target official revision.
+- [ ] Every broader-suite failure classified against the target official and
+      pre-merge custom baselines.
+- [ ] No new failure attributable to sm_omp integration remains.
+- [ ] Accepted upstream failures and infrastructure gaps recorded.
 - [ ] UML updated when architecture changed.
-- [ ] Required tests and type checks passed.
+- [ ] Required custom-TUI tests and type checks passed.
 - [ ] Interactive TUI smoke test passed.
-- [ ] Release tag created only when publishing a verified version.
+- [ ] Release tag created only from a tip verified under this acceptance policy.

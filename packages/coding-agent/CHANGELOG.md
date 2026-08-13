@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [17.2.15-sm.3] - 2026-08-13
+
+### Added
+
+- Added `/restart` to cleanly relaunch the interactive TUI after changing startup-only settings, resuming persisted conversation history or starting fresh from an empty session.
+
 ## [17.2.15-sm.2] - 2026-08-13
 
 ### Fixed

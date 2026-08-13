@@ -32,6 +32,15 @@ export const shutdownHandlerTui = (
 	return commandConsumed();
 };
 
+export const restartHandlerTui = (
+	_command: ParsedSlashCommand,
+	runtime: TuiSlashCommandRuntime,
+): SlashCommandResult => {
+	runtime.ctx.editor.setText("");
+	void runtime.ctx.restart();
+	return commandConsumed();
+};
+
 /** Parse the `/shake` subcommand into a {@link ShakeMode}; empty defaults to elide. */
 function parseShakeMode(args: string): ShakeMode | { error: string } {
 	const verb = args.trim().toLowerCase();
@@ -497,6 +506,11 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 			await runtime.output(formatWorkspaceDirectories(runtime));
 			return commandConsumed();
 		},
+	},
+	{
+		name: "restart",
+		description: "Restart OMP and resume the current session",
+		handleTui: restartHandlerTui,
 	},
 	{
 		name: "exit",

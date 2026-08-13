@@ -54,6 +54,7 @@ import {
 } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reset as resetCapabilities } from "../capability";
+import { getRestartBlockReason, isRestartableSessionFile, restartCurrentProcess } from "../cli/restart";
 import type { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
 import { KeybindingsManager } from "../config/keybindings";
@@ -4228,10 +4229,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	async shutdown(): Promise<void> {
-		if (this.#isShuttingDown) return;
-		this.#isShuttingDown = true;
-
+	async #teardownForProcessExit(): Promise<void> {
 		await this.#liveCommandController.stop();
 
 		this.#btwController.dispose();
@@ -4277,6 +4275,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		disposeTerminalTitleState();
 		popTerminalTitle();
 		this.stop();
+	}
+
+	async shutdown(): Promise<void> {
+		if (this.#isShuttingDown) return;
+		this.#isShuttingDown = true;
+		await this.#teardownForProcessExit();
 
 		// Print resumption hint if this is a persisted session
 		const sessionId = this.sessionManager.getSessionId();
@@ -4286,6 +4290,50 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		await postmortem.quit(0);
+	}
+
+	async restart(): Promise<void> {
+		if (this.#isShuttingDown) return;
+		const hasConversationHistory = this.sessionManager
+			.getEntries()
+			.some(
+				entry => entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant"),
+			);
+		let resumeSession: string | undefined;
+		if (hasConversationHistory) {
+			const sessionFile = this.sessionManager.getSessionFile();
+			if (!sessionFile) {
+				this.showWarning("This session is not persisted and cannot be restarted.");
+				return;
+			}
+			const sessionFileExists = await isRestartableSessionFile(sessionFile);
+			// The durability probe yields. A concurrent /restart or /exit may have
+			// claimed teardown ownership while the file check was in flight.
+			if (this.#isShuttingDown) return;
+			if (!sessionFileExists) {
+				this.showWarning("This session is not persisted and cannot be restarted.");
+				return;
+			}
+			resumeSession = sessionFile;
+		}
+
+		const registry = getRunningSubagentBadgeRegistry(this.collabGuest);
+		const activeSideRequests =
+			Number(this.#btwController.hasActiveRequest()) + Number(this.#omfgController.hasActiveRequest());
+		const blockReason = getRestartBlockReason(
+			this.session,
+			countRunningSubagentBadgeAgents(registry),
+			activeSideRequests,
+		);
+		if (blockReason) {
+			this.showWarning(blockReason);
+			return;
+		}
+
+		const cwd = this.sessionManager.getCwd();
+		this.#isShuttingDown = true;
+		await this.#teardownForProcessExit();
+		await restartCurrentProcess(resumeSession, cwd);
 	}
 
 	async checkShutdownRequested(): Promise<void> {

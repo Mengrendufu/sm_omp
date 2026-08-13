@@ -232,6 +232,7 @@ export interface InteractiveModeContext {
 	init(options?: InteractiveModeInitOptions): Promise<void>;
 	playWelcomeIntro(): void;
 	shutdown(): Promise<void>;
+	restart(): Promise<void>;
 	checkShutdownRequested(): Promise<void>;
 
 	// Extension UI integration
